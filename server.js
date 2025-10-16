@@ -344,14 +344,13 @@ app.get("/api/test", (req, res) => {
   });  
 });  
   
-// ====== إعداد البريد الإلكتروني (Nodemailer) ======  
-const transporter = nodemailer.createTransport({  
-  service: "gmail",  
-  auth: {  
-    user: "hajeenheq@gmail.com", // ← غيّرها لاحقًا لإيميلك  
-    pass: "nybbokijgakumhjf"  
-  }  
-});  
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    user: EMAIL_USER,
+    pass: EMAIL_PASS
+  }
+});
   
 // ====== توليد كود OTP عشوائي ======  
 function generateOTP() {  
@@ -2094,8 +2093,6 @@ app.post("/api/delete_account", auth, (req, res) => {
     });
   });
 });
-// ====== تشغيل الخادم ======  
-app.listen(PORT, () => {  
-  console.log(`🚀 خادم HEQ يعمل على: http://localhost:${PORT}`);  
-
+app.listen(PORT, () => {
+  console.log(`✅ Server running on port ${PORT}`);
 });
