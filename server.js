@@ -1,22 +1,22 @@
-// ========================================  
-// HEQ Server (v2) - قاعدة بيانات متقدمة  
-// ========================================  
-const express = require("express");  
-const cors = require("cors");  
-const sqlite3 = require("sqlite3").verbose();  
-const bcrypt = require("bcryptjs");  
-const nodemailer = require("nodemailer");  
-const jwt = require("jsonwebtoken");  
-const fs = require("fs");          
-const path = require("path");       
+const express = require("express");
+const cors = require("cors");
+const sqlite3 = require("sqlite3").verbose();
+const bcrypt = require("bcryptjs");
+const nodemailer = require("nodemailer");
+const jwt = require("jsonwebtoken");
+const fs = require("fs");
+const path = require("path");
 
-const app = express();  
-const PORT = 3000;  
-const SECRET_KEY = "HEQ_SUPER_SECRET_KEY";
-const REFRESH_SECRET = "HEQ_REFRESH_SECRET_KEY";  
-const ACCESS_EXPIRES_IN = "2h";                    
-const REFRESH_EXPIRES_DAYS = 30;                  
+const app = express();
 
+// ✅ قراءة القيم من متغيرات البيئة (Render فقط)
+const PORT = process.env.PORT;
+const SECRET_KEY = process.env.SECRET_KEY;
+const REFRESH_SECRET = process.env.REFRESH_SECRET;
+const EMAIL_USER = process.env.EMAIL_USER;
+const EMAIL_PASS = process.env.EMAIL_PASS;
+const ACCESS_EXPIRES_IN = "2h";
+const REFRESH_EXPIRES_DAYS = 30;
 // إعداد مجلد الرفع + serve static  
 const UPLOADS_DIR = path.join(__dirname, "uploads");  
 if (!fs.existsSync(UPLOADS_DIR)) {  
@@ -2097,4 +2097,5 @@ app.post("/api/delete_account", auth, (req, res) => {
 // ====== تشغيل الخادم ======  
 app.listen(PORT, () => {  
   console.log(`🚀 خادم HEQ يعمل على: http://localhost:${PORT}`);  
+
 });
