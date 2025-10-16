@@ -1,6 +1,18 @@
 const express = require("express");
 const cors = require("cors");
-const sqlite3 = require("sqlite3").verbose();
+
+const { Pool } = require("pg");
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false } // Render يستخدم اتصال SSL
+});
+
+
+function runQuery(query, params = [], callback) {
+  pool.query(query, params)
+    .then(result => callback && callback(null, result))
+    .catch(err => callback && callback(err, null));
+}
 const bcrypt = require("bcryptjs");
 const nodemailer = require("nodemailer");
 const jwt = require("jsonwebtoken");
@@ -56,18 +68,18 @@ function ensureColumn(table, columnDef) {
 // ====== إنشاء الجداول المتقدمة ======  
 db.serialize(() => {  
   // جدول المستخدمين الفعليين  
-  db.run(`  
-    CREATE TABLE IF NOT EXISTS users (  
-      id INTEGER PRIMARY KEY AUTOINCREMENT,  
-      email TEXT UNIQUE NOT NULL,  
-      password TEXT NOT NULL,  
-      name TEXT NOT NULL,  
-      bio TEXT DEFAULT '',  
-      avatar TEXT DEFAULT '',  
-      joined_at INTEGER NOT NULL,  
-      verified INTEGER DEFAULT 1  
-    )  
-  `);  
+  await pool.query(`
+  CREATE TABLE IF NOT EXISTS users (
+    id SERIAL PRIMARY KEY,
+    email TEXT UNIQUE NOT NULL,
+    password TEXT NOT NULL,
+    name TEXT NOT NULL,
+    bio TEXT DEFAULT '',
+    avatar TEXT DEFAULT '',
+    joined_at BIGINT NOT NULL,
+    verified BOOLEAN DEFAULT TRUE
+  )
+`);
   
   // جدول المستخدمين المعلّقين قبل التفعيل  
   db.run(`  
@@ -214,6 +226,15 @@ db.run("CREATE INDEX IF NOT EXISTS idx_chat_user ON system_chat(user_id, created
   
   console.log("✅ جميع الجداول جاهزة بنجاح");  
 });
+// ✅ اختبار إنشاء الجدول
+(async () => {
+  try {
+    await pool.query("SELECT NOW()");
+    console.log("🟢 تم الاتصال بقاعدة PostgreSQL بنجاح!");
+  } catch (err) {
+    console.error("❌ فشل الاتصال بقاعدة PostgreSQL:", err.message);
+  }
+})();
 // 🧑‍💻 إنشاء حساب أدمن افتراضي (مرة واحدة فقط)
 db.get("SELECT id FROM users WHERE is_admin = 1 LIMIT 1", (err, row) => {
   if (err) return console.error("❌ خطأ أثناء التحقق من الأدمن:", err.message);
@@ -2096,3 +2117,4 @@ app.post("/api/delete_account", auth, (req, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
