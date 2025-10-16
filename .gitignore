@@ -1,0 +1,5 @@
+node_modules/
+uploads/
+heq_mojtama.db
+.env
+*.log
