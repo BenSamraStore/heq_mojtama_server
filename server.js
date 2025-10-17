@@ -869,19 +869,19 @@ app.post("/api/posts", auth, upload.single("image"), async (req, res) => {
     if (req.file)
       imagePath = `${req.protocol}://${req.get("host")}/uploads/${req.file.filename}`;
 
-    const createdAt = Date.now();
-    const result = await pool.query(
-      `INSERT INTO posts (user_id, text, image, created_at)
-       VALUES ($1, $2, $3, $4) RETURNING id`,
-      [userId, text || "", imagePath, createdAt]
-    );
-
+    const createdAt = new Date().toISOString();
+const result = await pool.query(
+  `INSERT INTO posts (user_id, text, image, created_at)
+   VALUES ($1, $2, $3, $4) RETURNING id, created_at`,
+  [userId, text || "", imagePath, createdAt]
+);
     res.json({
-      ok: true,
-      id: result.rows[0].id,
-      message: "✅ تم نشر المنشور بنجاح",
-      image: imagePath
-    });
+  ok: true,
+  id: result.rows[0].id,
+  created_at: result.rows[0].created_at, // ← أضف هذا
+  message: "✅ تم نشر المنشور بنجاح",
+  image: imagePath
+});
   } catch (err) {
     console.error("❌ فشل إنشاء المنشور:", err);
     res.status(500).json({ error: "فشل إنشاء المنشور" });
@@ -910,13 +910,13 @@ app.post("/api/comments", auth, async (req, res) => {
       return res.status(403).json({ error: `⏳ حسابك محظور مؤقتًا (${diffH} ساعة متبقية).` });
     }
 
-    const createdAt = Date.now();
-    const insertRes = await pool.query(
-      `INSERT INTO comments (post_id, user_id, parent_id, text, created_at)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING id`,
-      [post_id, userId, parent_id || null, text, createdAt]
-    );
+    const createdAt = new Date().toISOString();
+const insertRes = await pool.query(
+  `INSERT INTO comments (post_id, user_id, parent_id, text, created_at)
+   VALUES ($1, $2, $3, $4, $5)
+   RETURNING id, created_at`,
+  [post_id, userId, parent_id || null, text, createdAt]
+);
 
     const commentId = insertRes.rows[0].id;
 
@@ -951,12 +951,12 @@ app.post("/api/comments", auth, async (req, res) => {
     const nameRes = await pool.query("SELECT name FROM users WHERE id = $1", [userId]);
     const fromUser = nameRes.rows.length ? nameRes.rows[0].name : "مستخدم";
 
-    res.json({
-      ok: true,
-      id: commentId,
-      message: "✅ تم إضافة التعليق بنجاح",
-      author_name: fromUser
-    });
+   res.json({
+  ok: true,
+  id: insertRes.rows[0].id,
+  created_at: insertRes.rows[0].created_at, // ← أضف هذا
+  message: "💬 تم إضافة التعليق بنجاح"
+});
   } catch (err) {
     console.error("❌ خطأ أثناء إضافة التعليق:", err);
     res.status(500).json({ error: "فشل إنشاء التعليق" });
@@ -2121,6 +2121,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
