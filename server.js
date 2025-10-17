@@ -869,7 +869,7 @@ app.post("/api/posts", auth, upload.single("image"), async (req, res) => {
     if (req.file)
       imagePath = `${req.protocol}://${req.get("host")}/uploads/${req.file.filename}`;
 
-    const createdAt = new Date().toISOString();
+    const createdAt = Date.now(); 
 const result = await pool.query(
   `INSERT INTO posts (user_id, text, image, created_at)
    VALUES ($1, $2, $3, $4) RETURNING id, created_at`,
@@ -910,7 +910,7 @@ app.post("/api/comments", auth, async (req, res) => {
       return res.status(403).json({ error: `⏳ حسابك محظور مؤقتًا (${diffH} ساعة متبقية).` });
     }
 
-    const createdAt = new Date().toISOString();
+     const createdAt = Date.now(); 
 const insertRes = await pool.query(
   `INSERT INTO comments (post_id, user_id, parent_id, text, created_at)
    VALUES ($1, $2, $3, $4, $5)
@@ -2121,6 +2121,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
