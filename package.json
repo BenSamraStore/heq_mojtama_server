@@ -9,7 +9,7 @@
   "nodemailer": "^7.0.7",
   "sqlite3": "^5.1.7",
   "node-fetch": "^2.6.7"
-}
+},
   "name": "heq_mojtama_server",
   "version": "1.0.0",
   "description": "",
