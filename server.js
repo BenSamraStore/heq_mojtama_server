@@ -2080,7 +2080,6 @@ app.post("/api/delete_account", auth, async (req, res) => {
 // ============================================
 // ✉️ إرسال البريد عبر Brevo (SendinBlue سابقاً)
 // ============================================
-
 const fetch = require("node-fetch");
 
 async function sendEmailBrevo(to, subject, html) {
@@ -2093,7 +2092,7 @@ async function sendEmailBrevo(to, subject, html) {
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        sender: { name: "HEQ المجتمع", email: "no-reply@heqcommunity.com" },
+        sender: { name: "Hajjen Mojtama", email: "darauemaror@gmail.com" },
         to: [{ email: to }],
         subject,
         htmlContent: html,
@@ -2101,6 +2100,8 @@ async function sendEmailBrevo(to, subject, html) {
     });
 
     const data = await res.json();
+    console.log("📬 رد Brevo:", data); // 🟢 راقب هذا في الـ logs
+
     if (res.ok) {
       console.log(`📩 تم إرسال البريد إلى ${to}`);
     } else {
@@ -2110,7 +2111,6 @@ async function sendEmailBrevo(to, subject, html) {
     console.error("🚫 خطأ في الاتصال بـ Brevo:", err);
   }
 }
-
 // =======================================
 // 🧠 Health check + تشغيل السيرفر
 // =======================================
@@ -2121,6 +2121,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
