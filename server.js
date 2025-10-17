@@ -2081,7 +2081,7 @@ app.post("/api/delete_account", auth, async (req, res) => {
 // ✉️ إرسال البريد عبر Brevo (SendinBlue سابقاً)
 // ============================================
 
-const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
+const fetch = require("node-fetch");
 
 async function sendEmailBrevo(to, subject, html) {
   try {
@@ -2121,5 +2121,6 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
