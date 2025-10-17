@@ -842,111 +842,110 @@ app.get("/api/posts", async (_req, res) => {
   }
 });
 
-// ====== إنشاء منشور جديد ======
-app.post("/api/posts", auth, upload.single("image"), async (req, res) => {
-  try {
-    const { text } = req.body;
-    const userId = req.user.id;
-
-    // 🧠 فحص الحظر أو التعطيل
-    const userRes = await pool.query("SELECT disabled, lock_until FROM users WHERE id = $1", [userId]);
-    const user = userRes.rows[0];
-    if (!user)
-      return res.status(404).json({ error: "المستخدم غير موجود" });
-
-    if (user.disabled)
-      return res.status(403).json({ error: "🚫 حسابك معطّل. لا يمكنك النشر أو التفاعل." });
-
-    if (user.lock_until && user.lock_until > Date.now()) {
-      const diffH = Math.ceil((user.lock_until - Date.now()) / (1000 * 60 * 60));
-      return res.status(403).json({ error: `⏳ حسابك محظور مؤقتًا (${diffH} ساعة متبقية).` });
+// ====== إنشاء منشور جديد ======  
+app.post("/api/posts", auth, upload.single("image"), async (req, res) => {  
+  try {  
+    const { text } = req.body;  
+    const userId = req.user.id;  
+  
+    // 🧠 فحص الحظر أو التعطيل  
+    const userRes = await pool.query("SELECT disabled, lock_until FROM users WHERE id = $1", [userId]);  
+    const user = userRes.rows[0];  
+    if (!user)  
+      return res.status(404).json({ error: "المستخدم غير موجود" });  
+  
+    if (user.disabled)  
+      return res.status(403).json({ error: "🚫 حسابك معطّل. لا يمكنك النشر أو التفاعل." });  
+  
+    if (user.lock_until && user.lock_until > Date.now()) {  
+      const diffH = Math.ceil((user.lock_until - Date.now()) / (1000 * 60 * 60));  
+      return res.status(403).json({ error: `⏳ حسابك محظور مؤقتًا (${diffH} ساعة متبقية).` });  
+    }  
+  
+    if (!text && !req.file)  
+      return res.status(400).json({ error: "يرجى كتابة نص أو رفع صورة" });  
+  
+    let imagePath = null;  
+    if (req.file)  
+      imagePath = `${req.protocol}://${req.get("host")}/uploads/${req.file.filename}`;  
+  
+    const createdAt = Date.now();  
+    const result = await pool.query(  
+      `INSERT INTO posts (user_id, text, image, created_at)  
+       VALUES ($1, $2, $3, $4) RETURNING id`,  
+      [userId, text || "", imagePath, createdAt]  
+    );  
+  
+    res.json({  
+      ok: true,  
+      id: result.rows[0].id,  
+      message: "✅ تم نشر المنشور بنجاح",  
+      image: imagePath  
+    });  
+  } catch (err) {  
+    console.error("❌ فشل إنشاء المنشور:", err);  
+    res.status(500).json({ error: "فشل إنشاء المنشور" });  
+  }  
+});  
+  
+// ====== إنشاء تعليق جديد ======  
+app.post("/api/comments", auth, async (req, res) => {  
+  try {  
+    const { post_id, parent_id, text } = req.body;  
+    const userId = req.user.id;  
+  
+    if (!text || !post_id)  
+      return res.status(400).json({ error: "النص والمعرف مطلوبان" });  
+  
+    const userRes = await pool.query("SELECT disabled, lock_until FROM users WHERE id = $1", [userId]);  
+    const user = userRes.rows[0];  
+    if (!user)  
+      return res.status(404).json({ error: "المستخدم غير موجود" });  
+  
+    if (user.disabled)  
+      return res.status(403).json({ error: "🚫 حسابك معطّل. لا يمكنك التعليق." });  
+  
+    if (user.lock_until && user.lock_until > Date.now()) {  
+      const diffH = Math.ceil((user.lock_until - Date.now()) / (1000 * 60 * 60));  
+      return res.status(403).json({ error: `⏳ حسابك محظور مؤقتًا (${diffH} ساعة متبقية).` });  
+    }  
+  
+    const createdAt = Date.now();  
+    const insertRes = await pool.query(  
+      `INSERT INTO comments (post_id, user_id, parent_id, text, created_at)  
+       VALUES ($1, $2, $3, $4, $5)  
+       RETURNING id`,  
+      [post_id, userId, parent_id || null, text, createdAt]  
+    );  
+  
+    const commentId = insertRes.rows[0].id;  
+  
+    // 📢 إشعار لصاحب المنشور أو التعليق  
+    if (!parent_id) {  
+      // تعليق جديد على منشور  
+      const postOwner = await pool.query(`SELECT user_id FROM posts WHERE id = $1`, [post_id]);  
+      if (postOwner.rows.length && postOwner.rows[0].user_id !== userId) {  
+        await notifyUser(  
+          postOwner.rows[0].user_id,  
+          "💬 تعليق جديد على منشورك",  
+          "قام أحد المستخدمين بالتعليق على منشورك.",  
+          "comment",  
+          { post_id, comment_id: commentId, sender_id: userId }  
+        );  
+      }  
+    } else {  
+      // رد على تعليق  
+      const parentOwner = await pool.query(`SELECT user_id FROM comments WHERE id = $1`, [parent_id]);  
+      if (parentOwner.rows.length && parentOwner.rows[0].user_id !== userId) {  
+        await notifyUser(  
+          parentOwner.rows[0].user_id,  
+          "↩️ رد على تعليقك",  
+          "قام أحد المستخدمين بالرد على تعليقك.",  
+          "reply",  
+          { post_id, parent_id, comment_id: commentId, sender_id: userId }  
+        );  
+      }  
     }
-
-    if (!text && !req.file)
-      return res.status(400).json({ error: "يرجى كتابة نص أو رفع صورة" });
-
-    let imagePath = null;
-    if (req.file)
-      imagePath = `${req.protocol}://${req.get("host")}/uploads/${req.file.filename}`;
-
-    const createdAt = Date.now(); 
-const result = await pool.query(
-  `INSERT INTO posts (user_id, text, image, created_at)
-   VALUES ($1, $2, $3, $4) RETURNING id, created_at`,
-  [userId, text || "", imagePath, createdAt]
-);
-    res.json({
-  ok: true,
-  id: result.rows[0].id,
-  created_at: result.rows[0].created_at, // ← أضف هذا
-  message: "✅ تم نشر المنشور بنجاح",
-  image: imagePath
-});
-  } catch (err) {
-    console.error("❌ فشل إنشاء المنشور:", err);
-    res.status(500).json({ error: "فشل إنشاء المنشور" });
-  }
-});
-
-// ====== إنشاء تعليق جديد ======
-app.post("/api/comments", auth, async (req, res) => {
-  try {
-    const { post_id, parent_id, text } = req.body;
-    const userId = req.user.id;
-
-    if (!text || !post_id)
-      return res.status(400).json({ error: "النص والمعرف مطلوبان" });
-
-    const userRes = await pool.query("SELECT disabled, lock_until FROM users WHERE id = $1", [userId]);
-    const user = userRes.rows[0];
-    if (!user)
-      return res.status(404).json({ error: "المستخدم غير موجود" });
-
-    if (user.disabled)
-      return res.status(403).json({ error: "🚫 حسابك معطّل. لا يمكنك التعليق." });
-
-    if (user.lock_until && user.lock_until > Date.now()) {
-      const diffH = Math.ceil((user.lock_until - Date.now()) / (1000 * 60 * 60));
-      return res.status(403).json({ error: `⏳ حسابك محظور مؤقتًا (${diffH} ساعة متبقية).` });
-    }
-
-     const createdAt = Date.now(); 
-const insertRes = await pool.query(
-  `INSERT INTO comments (post_id, user_id, parent_id, text, created_at)
-   VALUES ($1, $2, $3, $4, $5)
-   RETURNING id, created_at`,
-  [post_id, userId, parent_id || null, text, createdAt]
-);
-
-    const commentId = insertRes.rows[0].id;
-
-    // 📢 إشعار لصاحب المنشور أو التعليق
-    if (!parent_id) {
-      // تعليق جديد على منشور
-      const postOwner = await pool.query(`SELECT user_id FROM posts WHERE id = $1`, [post_id]);
-      if (postOwner.rows.length && postOwner.rows[0].user_id !== userId) {
-        await notifyUser(
-          postOwner.rows[0].user_id,
-          "💬 تعليق جديد على منشورك",
-          "قام أحد المستخدمين بالتعليق على منشورك.",
-          "comment",
-          { post_id, comment_id: commentId, sender_id: userId }
-        );
-      }
-    } else {
-      // رد على تعليق
-      const parentOwner = await pool.query(`SELECT user_id FROM comments WHERE id = $1`, [parent_id]);
-      if (parentOwner.rows.length && parentOwner.rows[0].user_id !== userId) {
-        await notifyUser(
-          parentOwner.rows[0].user_id,
-          "↩️ رد على تعليقك",
-          "قام أحد المستخدمين بالرد على تعليقك.",
-          "reply",
-          { post_id, parent_id, comment_id: commentId, sender_id: userId }
-        );
-      }
-    }
-
     // 🧩 جلب اسم المرسل لواجهة العميل
     const nameRes = await pool.query("SELECT name FROM users WHERE id = $1", [userId]);
     const fromUser = nameRes.rows.length ? nameRes.rows[0].name : "مستخدم";
