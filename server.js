@@ -195,6 +195,27 @@ app.get("/api/test", (_req, res) => {
         revoked INTEGER DEFAULT 0
       )
     `);
+    // جداول مؤقتة للتسجيل والتحقق
+await runQuery(`
+  CREATE TABLE IF NOT EXISTS pending_users (
+    id SERIAL PRIMARY KEY,
+    email TEXT UNIQUE NOT NULL,
+    password TEXT NOT NULL,
+    name TEXT NOT NULL,
+    otp_code TEXT NOT NULL,
+    created_at BIGINT NOT NULL
+  )
+`);
+
+await runQuery(`
+  CREATE TABLE IF NOT EXISTS otp_codes (
+    id SERIAL PRIMARY KEY,
+    email TEXT NOT NULL,
+    code TEXT NOT NULL,
+    expires_at BIGINT NOT NULL
+  )
+`);
+console.log("📩 جداول pending_users و otp_codes جاهزة");
 
     // notifications
     await runQuery(`
@@ -2075,3 +2096,4 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
