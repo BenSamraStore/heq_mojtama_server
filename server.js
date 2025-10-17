@@ -4,7 +4,6 @@
 const express = require("express");
 const cors = require("cors");
 const bcrypt = require("bcryptjs");
-const nodemailer = require("nodemailer");
 const jwt = require("jsonwebtoken");
 const fs = require("fs");
 const path = require("path");
@@ -302,13 +301,6 @@ console.log("📩 جداول pending_users و otp_codes جاهزة");
   }
 })();
 
-// ─────────────────────────────────────────
-// Nodemailer (Gmail)
-// ─────────────────────────────────────────
-const transporter = nodemailer.createTransport({
-  service: "gmail",
-  auth: { user: EMAIL_USER, pass: EMAIL_PASS }
-});
 // ====== توليد كود OTP عشوائي ======
 function generateOTP() {
   return Math.floor(100000 + Math.random() * 900000).toString();
@@ -363,7 +355,7 @@ app.post("/api/signup", async (req, res) => {
       `
     };
 
-    await transporter.sendMail(mailOptions);
+    await sendEmailBrevo(mailOptions.to, mailOptions.subject, mailOptions.html);
 
     // تخزين الرمز في جدول otp_codes
     const expiresAt = Date.now() + 10 * 60 * 1000; // 10 دقائق
@@ -628,7 +620,7 @@ app.post("/api/forgot_password", async (req, res) => {
       `
     };
 
-    await transporter.sendMail(mailOptions);
+    await sendEmailBrevo(mailOptions.to, mailOptions.subject, mailOptions.html);
     console.log(`📧 تم إرسال رمز استعادة لكلمة المرور إلى ${email}: ${otp}`);
 
     res.json({ ok: true, message: "📨 تم إرسال رمز الاستعادة إلى بريدك الإلكتروني" });
@@ -2085,6 +2077,39 @@ app.post("/api/delete_account", auth, async (req, res) => {
     res.status(500).json({ ok: false, error: "فشل حذف الحساب" });
   }
 });
+// ============================================
+// ✉️ إرسال البريد عبر Brevo (SendinBlue سابقاً)
+// ============================================
+
+const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
+
+async function sendEmailBrevo(to, subject, html) {
+  try {
+    const res = await fetch("https://api.brevo.com/v3/smtp/email", {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        "api-key": process.env.BREVO_API_KEY,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        sender: { name: "HEQ المجتمع", email: "no-reply@heqcommunity.com" },
+        to: [{ email: to }],
+        subject,
+        htmlContent: html,
+      }),
+    });
+
+    const data = await res.json();
+    if (res.ok) {
+      console.log(`📩 تم إرسال البريد إلى ${to}`);
+    } else {
+      console.error("❌ فشل إرسال البريد:", data);
+    }
+  } catch (err) {
+    console.error("🚫 خطأ في الاتصال بـ Brevo:", err);
+  }
+}
 
 // =======================================
 // 🧠 Health check + تشغيل السيرفر
@@ -2096,4 +2121,5 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
