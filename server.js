@@ -305,7 +305,7 @@ console.log("📩 جداول pending_users و otp_codes جاهزة");
       )
     `);
 
-    // reports (نضيفها لأنها كانت مذكورة بالensureColumn)
+ 
     await runQuery(`
       CREATE TABLE IF NOT EXISTS reports (
         id SERIAL PRIMARY KEY,
@@ -320,13 +320,24 @@ console.log("📩 جداول pending_users و otp_codes جاهزة");
         created_at BIGINT NOT NULL
       )
     `);
-
-    // فهارس
+    
+// saved_posts
+await runQuery(`
+  CREATE TABLE IF NOT EXISTS saved_posts (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+    saved_at BIGINT NOT NULL,
+    UNIQUE(user_id, post_id)
+  )
+`);
+   
     await runQuery(`CREATE INDEX IF NOT EXISTS idx_posts_created ON posts(created_at)`);
     await runQuery(`CREATE INDEX IF NOT EXISTS idx_comments_post ON comments(post_id)`);
     await runQuery(`CREATE INDEX IF NOT EXISTS idx_react_target ON reactions(target_type, target_id)`);
     await runQuery(`CREATE INDEX IF NOT EXISTS idx_notif_to ON notifications(to_user_id, is_read, created_at)`);
     await runQuery(`CREATE INDEX IF NOT EXISTS idx_chat_user ON system_chat(user_id, created_at)`);
+    
 
     console.log("✅ جميع الجداول والفهارس جاهزة");
 
@@ -1278,23 +1289,7 @@ app.delete("/api/posts/:id", auth, async (req, res) => {
   }
 });
 
-// ====== إرسال بلاغ ======
-(async () => {
-  try {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS reports (
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-        post_id INTEGER REFERENCES posts(id) ON DELETE CASCADE,
-        reason TEXT NOT NULL,
-        created_at BIGINT NOT NULL
-      )
-    `);
-    console.log("📋 جدول reports جاهز");
-  } catch (e) {
-    console.error("⚠️ فشل إنشاء جدول reports:", e.message);
-  }
-})();
+
 
 app.post("/api/report", auth, async (req, res) => {
   try {
@@ -1317,23 +1312,7 @@ app.post("/api/report", auth, async (req, res) => {
   }
 });
 
-// ====== حفظ منشور ======
-(async () => {
-  try {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS saved_posts (
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
-        saved_at BIGINT NOT NULL,
-        UNIQUE(user_id, post_id)
-      )
-    `);
-    console.log("💾 جدول saved_posts جاهز");
-  } catch (e) {
-    console.error("⚠️ فشل إنشاء جدول saved_posts:", e.message);
-  }
-})();
+
 
 app.post("/api/saved", auth, async (req, res) => {
   try {
@@ -2256,6 +2235,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
