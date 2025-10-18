@@ -734,13 +734,13 @@ app.post("/api/make_admin", async (req, res) => {
 });
 
 // ====== تحديث الملف الشخصي ======
-app.post("/api/profile", auth, upload.single('avatarFile'), async (req, res) => {
+app.post("/api/profile", auth, async (req, res) => { // ⏪ حذفنا upload.single من هنا
   try {
     const email = req.user.email;
     if (!email) return res.status(401).json({ error: "جلسة غير صالحة" });
 
-    // لاحظ أننا نتوقع الآن 'avatarFile' كملف وليس 'avatarBase64' كنص
-    const { name, bio, country, residence, age, gender, show_email } = req.body;
+    // ⏪ عدنا لاستخدام avatarBase64
+    const { name, bio, country, residence, age, gender, avatarBase64, show_email } = req.body;
     const setClauses = [];
     const params = [];
     let newAvatarUrl = null;
@@ -753,28 +753,25 @@ app.post("/api/profile", auth, upload.single('avatarFile'), async (req, res) => 
     if (typeof gender !== "undefined")     { setClauses.push(`gender = $${params.length + 1}`); params.push(gender); }
     if (typeof show_email !== "undefined") { setClauses.push(`show_email = $${params.length + 1}`); params.push(show_email ? 1 : 0); }
 
-    // ✨ منطق الرفع الجديد إلى Cloudinary
-    if (req.file) {
+    // ✨ منطق الرفع الجديد من Base64
+    if (avatarBase64 && avatarBase64.startsWith('data:image')) {
       try {
-        const result = await cloudinary.uploader.upload(req.file.path, {
-          folder: "heq_mojtama/avatars", // اسم المجلد داخل Cloudinary
-          public_id: `avatar_${req.user.id}`, // اسم مميز للملف (يستبدل الصورة القديمة بنفس الاسم)
+        // Cloudinary يمكنه الرفع مباشرة من نص Base64
+        const result = await cloudinary.uploader.upload(avatarBase64, {
+          folder: "heq_mojtama/avatars",
+          public_id: `avatar_${req.user.id}`,
           overwrite: true,
-          transformation: [ // تحويلات لتحسين الصورة
+          transformation: [
             { width: 250, height: 250, gravity: "face", crop: "thumb" },
             { fetch_format: "auto", quality: "auto" }
           ]
         });
-        newAvatarUrl = result.secure_url; // الرابط الآمن للصورة
+        newAvatarUrl = result.secure_url;
         setClauses.push(`avatar = $${params.length + 1}`);
         params.push(newAvatarUrl);
-        
-        // حذف الملف المؤقت من خادم Render بعد رفعه بنجاح
-        fs.unlinkSync(req.file.path);
 
       } catch (uploadError) {
-        console.error("❌ خطأ أثناء الرفع إلى Cloudinary:", uploadError);
-        // لا نوقف العملية، فقط نتجاهل تحديث الصورة
+        console.error("❌ خطأ أثناء الرفع من Base64 إلى Cloudinary:", uploadError);
       }
     }
 
@@ -786,7 +783,6 @@ app.post("/api/profile", auth, upload.single('avatarFile'), async (req, res) => 
     const query = `UPDATE users SET ${setClauses.join(", ")} WHERE email = $${params.length}`;
     await pool.query(query, params);
 
-    // نرسل رابط الصورة الجديد للواجهة الأمامية لتحديثها فوراً
     res.json({ ok: true, message: "✅ تم تحديث الملف الشخصي بنجاح", newAvatarUrl });
 
   } catch (err) {
@@ -2177,6 +2173,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
