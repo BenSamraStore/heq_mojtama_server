@@ -95,14 +95,61 @@ async function storeRefreshToken(userId, refreshToken) {
 // إشعار
 async function notifyUser(toUserId, title, body, type = "system", meta = {}) {
   const createdAt = Date.now();
+  let finalTitle = title;
+  let finalBody = body;
+  let senderName = "مستخدم";
+
   try {
+    // الخطوة 1: جلب اسم المرسل إذا كان موجوداً
+    if (meta.sender_id) {
+      const { rows } = await runQuery("SELECT name FROM users WHERE id = $1", [meta.sender_id]);
+      if (rows.length > 0) {
+        senderName = rows[0].name;
+      }
+    }
+
+    // الخطوة 2: تخصيص الرسائل حسب نوع الإشعار
+    switch (type) {
+      case "comment":
+        finalTitle = "💬 تعليق جديد";
+        finalBody = `${senderName} علّق على منشورك.`;
+        break;
+      case "reply":
+        finalTitle = "↩️ رد على تعليقك";
+        finalBody = `${senderName} ردّ على تعليقك.`;
+        break;
+      case "reaction":
+        finalTitle = "👍 تفاعل جديد";
+        finalBody = `${senderName} تفاعل مع منشورك.`;
+        break;
+      case "connect_request":
+        finalTitle = "🔗 طلب وصل جديد";
+        finalBody = `${senderName} أرسل إليك طلب وصل.`;
+        break;
+      case "connect_accept":
+        finalTitle = "🎉 تم قبول طلبك";
+        finalBody = `لقد وافق ${senderName} على طلب الوصل.`;
+        break;
+
+      case "connect_reject":
+        finalTitle = "😔 تم رفض طلبك";
+        finalBody = `قام ${senderName} برفض طلب الوصل.`;
+        break;
+      
+      // يمكنك إضافة أنواع أخرى هنا مستقبلاً
+    }
+
+    // الخطوة 3: إدراج الإشعار المخصص في قاعدة البيانات
     await runQuery(
       `INSERT INTO notifications (to_user_id, title, body, type, meta, is_read, created_at)
        VALUES ($1, $2, $3, $4, $5, 0, $6)`,
-      [toUserId ?? null, title, body, type, JSON.stringify(meta), createdAt]
+      [toUserId ?? null, finalTitle, finalBody, type, JSON.stringify(meta), createdAt]
     );
+    
+    console.log(`📢 إشعار مرسل إلى ${toUserId || 'الكل'}: ${finalBody}`);
+
   } catch (e) {
-    console.error("❌ خطأ إدخال إشعار:", e.message);
+    console.error("❌ خطأ أثناء إنشاء وإرسال الإشعار:", e.message);
   }
 }
 
@@ -351,7 +398,7 @@ app.post("/api/signup", async (req, res) => {
       html: `
         <div style="font-family:Arial;padding:20px;">
           <h2>رمز تفعيل حسابك في HEQ المجتمع</h2>
-          <p>مرحبًا ${name} 👋،</p>
+          <p>السلام عليكم ورحمة الله ${name} 👋،</p>
           <p>رمز التفعيل الخاص بك هو:</p>
           <h1 style="color:#007BFF;letter-spacing:3px;">${otp}</h1>
           <p>ينتهي الرمز خلال <b>10 دقائق</b>.</p>
@@ -615,11 +662,11 @@ app.post("/api/forgot_password", async (req, res) => {
       html: `
         <div style="font-family:Arial;padding:20px;">
           <h2>طلب استعادة كلمة المرور</h2>
-          <p>مرحبًا 👋، لقد طلبت إعادة تعيين كلمة المرور لحسابك.</p>
+          <p>السلام عليكم ورحمة الله 👋، لقد طلبت إعادة تعيين كلمة المرور لحسابك.</p>
           <p>رمز التفعيل الخاص بك هو:</p>
           <h1 style="color:#007BFF;letter-spacing:3px;">${otp}</h1>
           <p>ينتهي الرمز خلال <b>10 دقائق</b>.</p>
-          <p>إذا لم تطلب هذا، يمكنك تجاهل هذه الرسالة.</p>
+          <p>إذا لم تكن أنت تحقق من حسابك.</p>
         </div>
       `
     };
@@ -2187,6 +2234,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
