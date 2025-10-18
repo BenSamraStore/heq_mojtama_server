@@ -1178,16 +1178,32 @@ app.put("/api/posts/:id", auth, upload.single("image"), async (req, res) => {
     if (post.user_id !== userId)
       return res.status(403).json({ error: "❌ لا يمكنك تعديل منشور غيرك" });
 
-    let imagePath = post.image;
-    if (req.file)
-      imagePath = `${req.protocol}://${req.get("host")}/uploads/${req.file.filename}`;
+    let imageUrl = post.image; // القيمة الافتراضية هي الصورة القديمة
+
+    // ✨ منطق الرفع الجديد إلى Cloudinary
+    if (req.file) {
+      try {
+        const result = await cloudinary.uploader.upload(req.file.path, {
+          folder: "heq_mojtama/posts",
+          transformation: [
+            { width: 1080, crop: "limit" }, // تحديد أقصى عرض للصورة
+            { fetch_format: "auto", quality: "auto" }
+          ]
+        });
+        imageUrl = result.secure_url; // تحديث الرابط بالصورة الجديدة
+        fs.unlinkSync(req.file.path); // حذف الملف المؤقت
+      } catch (uploadError) {
+        console.error("❌ خطأ أثناء تعديل صورة المنشور:", uploadError);
+        return res.status(500).json({ error: "فشل في معالجة الصورة الجديدة" });
+      }
+    }
 
     await pool.query(
       "UPDATE posts SET text = $1, image = $2 WHERE id = $3",
-      [text || post.text, imagePath, postId]
+      [text || post.text, imageUrl, postId]
     );
 
-    res.json({ ok: true, message: "✅ تم تعديل المنشور بنجاح", image: imagePath });
+    res.json({ ok: true, message: "✅ تم تعديل المنشور بنجاح", image: imageUrl });
   } catch (err) {
     console.error("❌ خطأ أثناء تعديل المنشور:", err);
     res.status(500).json({ error: "فشل تعديل المنشور" });
@@ -2173,6 +2189,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
