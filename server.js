@@ -199,7 +199,7 @@ app.get("/api/test", (_req, res) => {
     await runQuery(`
       CREATE TABLE IF NOT EXISTS posts (
         id SERIAL PRIMARY KEY,
-        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
         text TEXT,
         image TEXT,
         agree INTEGER DEFAULT 0,
@@ -213,7 +213,7 @@ app.get("/api/test", (_req, res) => {
       CREATE TABLE IF NOT EXISTS comments (
         id SERIAL PRIMARY KEY,
         post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
-        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
         parent_id INTEGER REFERENCES comments(id) ON DELETE CASCADE,
         text TEXT NOT NULL,
         agree INTEGER DEFAULT 0,
@@ -271,7 +271,7 @@ console.log("📩 جداول pending_users و otp_codes جاهزة");
     await runQuery(`
       CREATE TABLE IF NOT EXISTS notifications (
         id SERIAL PRIMARY KEY,
-        to_user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        to_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
         title TEXT NOT NULL,
         body TEXT NOT NULL,
         type TEXT DEFAULT 'system',
@@ -285,7 +285,7 @@ console.log("📩 جداول pending_users و otp_codes جاهزة");
     await runQuery(`
       CREATE TABLE IF NOT EXISTS system_chat (
         id SERIAL PRIMARY KEY,
-        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
         message TEXT NOT NULL,
         from_admin INTEGER DEFAULT 0,
         created_at BIGINT NOT NULL
@@ -2234,6 +2234,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
