@@ -2160,34 +2160,56 @@ app.post("/api/change_password", auth, async (req, res) => {
   }
 });
 
-// 🗑️ حذف الحساب بالكامل
+// 🗑️ حذف الحساب بالكامل (نسخة محسنة تتعامل مع SET NULL)
 app.post("/api/delete_account", auth, async (req, res) => {
+  const { password } = req.body;
+  const userId = req.user.id;
+
+  if (!password) {
+    return res.status(400).json({ ok: false, error: "الرجاء إدخال كلمة المرور" });
+  }
+
+  const client = await pool.connect(); // ✨ نستخدم Transaction لضمان الأمان
+
   try {
-    const { password } = req.body;
-    const userId = req.user.id;
-    if (!password)
-      return res.status(400).json({ ok: false, error: "الرجاء إدخال كلمة المرور" });
-
-    const { rows } = await pool.query(`SELECT password FROM users WHERE id=$1`, [userId]);
-    if (!rows.length)
+    // 1. التحقق من كلمة المرور
+    const { rows } = await client.query(`SELECT password FROM users WHERE id=$1`, [userId]);
+    if (!rows.length) {
       return res.status(404).json({ ok: false, error: "المستخدم غير موجود" });
-
-    const bcrypt = require("bcryptjs");
-    const match = await bcrypt.compare(password, rows[0].password);
-    if (!match)
-      return res.json({ ok: false, error: "❌ كلمة المرور غير صحيحة!" });
-
-    const tablesToClean = ["posts", "comments", "connections", "notifications", "reactions", "saved_posts", "reports"];
-    for (const table of tablesToClean) {
-      await pool.query(`DELETE FROM ${table} WHERE user_id=$1`, [userId]);
     }
-    await pool.query(`DELETE FROM users WHERE id=$1`, [userId]);
+    const match = await bcrypt.compare(password, rows[0].password);
+    if (!match) {
+      return res.json({ ok: false, error: "❌ كلمة المرور غير صحيحة!" });
+    }
 
-    console.log(`🗑️ حذف المستخدم ${userId} وجميع بياناته`);
-    res.json({ ok: true });
+    // ✨ بدء الـ Transaction
+    await client.query('BEGIN');
+
+    // 2. حذف السجلات التي لها علاقة CASCADE (يجب حذفها أولاً)
+    await client.query(`DELETE FROM reactions WHERE user_id=$1`, [userId]);
+    await client.query(`DELETE FROM connections WHERE user_id=$1 OR target_id=$1`, [userId]);
+    await client.query(`DELETE FROM refresh_tokens WHERE user_id=$1`, [userId]);
+    await client.query(`DELETE FROM saved_posts WHERE user_id=$1`, [userId]);
+    
+    // 3. الآن يمكننا حذف المستخدم بأمان.
+    // الجداول الأخرى (posts, comments, notifications, system_chat)
+    // ستقوم تلقائياً بتحديث user_id إلى NULL بسبب قاعدة ON DELETE SET NULL.
+    await client.query(`DELETE FROM users WHERE id=$1`, [userId]);
+
+    // ✨ تأكيد الـ Transaction
+    await client.query('COMMIT');
+
+    console.log(`🗑️ تم حذف المستخدم ${userId} بنجاح`);
+    res.json({ ok: true, message: "تم حذف الحساب بنجاح." });
+
   } catch (err) {
-    console.error("delete_account:", err);
-    res.status(500).json({ ok: false, error: "فشل حذف الحساب" });
+    // 롤백 في حالة حدوث أي خطأ
+    await client.query('ROLLBACK');
+    console.error("❌ خطأ فادح أثناء حذف الحساب:", err);
+    res.status(500).json({ ok: false, error: "فشل حذف الحساب بسبب خطأ داخلي" });
+  } finally {
+    // تحرير الاتصال بقاعدة البيانات
+    client.release();
   }
 });
 // ============================================
@@ -2234,6 +2256,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
