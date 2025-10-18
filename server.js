@@ -734,46 +734,66 @@ app.post("/api/make_admin", async (req, res) => {
 });
 
 // ====== تحديث الملف الشخصي ======
-app.post("/api/profile", auth, async (req, res) => {
+app.post("/api/profile", auth, upload.single('avatarFile'), async (req, res) => {
   try {
     const email = req.user.email;
     if (!email) return res.status(401).json({ error: "جلسة غير صالحة" });
 
-    const { name, bio, country, residence, age, gender, avatarBase64, show_email } = req.body;
+    // لاحظ أننا نتوقع الآن 'avatarFile' كملف وليس 'avatarBase64' كنص
+    const { name, bio, country, residence, age, gender, show_email } = req.body;
     const setClauses = [];
     const params = [];
+    let newAvatarUrl = null;
 
-    if (typeof name !== "undefined")       { setClauses.push("name = $"+(params.length+1)); params.push(name); }
-    if (typeof bio !== "undefined")        { setClauses.push("bio = $"+(params.length+1)); params.push(bio); }
-    if (typeof country !== "undefined")    { setClauses.push("country = $"+(params.length+1)); params.push(country); }
-    if (typeof residence !== "undefined")  { setClauses.push("residence = $"+(params.length+1)); params.push(residence); }
-    if (typeof age !== "undefined")        { setClauses.push("age = $"+(params.length+1)); params.push(age ?? null); }
-    if (typeof gender !== "undefined")     { setClauses.push("gender = $"+(params.length+1)); params.push(gender); }
-    if (typeof show_email !== "undefined") { setClauses.push("show_email = $"+(params.length+1)); params.push(show_email ? 1 : 0); }
+    if (typeof name !== "undefined")       { setClauses.push(`name = $${params.length + 1}`); params.push(name); }
+    if (typeof bio !== "undefined")        { setClauses.push(`bio = $${params.length + 1}`); params.push(bio); }
+    if (typeof country !== "undefined")    { setClauses.push(`country = $${params.length + 1}`); params.push(country); }
+    if (typeof residence !== "undefined")  { setClauses.push(`residence = $${params.length + 1}`); params.push(residence); }
+    if (typeof age !== "undefined")        { setClauses.push(`age = $${params.length + 1}`); params.push(age ?? null); }
+    if (typeof gender !== "undefined")     { setClauses.push(`gender = $${params.length + 1}`); params.push(gender); }
+    if (typeof show_email !== "undefined") { setClauses.push(`show_email = $${params.length + 1}`); params.push(show_email ? 1 : 0); }
 
-    if (avatarBase64 && avatarBase64.startsWith("data:image")) {
-      const fileName = `avatar_${Date.now()}.png`;
-      const avatarPath = `${req.protocol}://${req.get("host")}/uploads/${fileName}`;
-      const base64Data = avatarBase64.replace(/^data:image\/\w+;base64,/, "");
-      fs.writeFileSync(path.join(UPLOADS_DIR, fileName), base64Data, "base64");
-      setClauses.push("avatar = $"+(params.length+1));
-      params.push(avatarPath);
+    // ✨ منطق الرفع الجديد إلى Cloudinary
+    if (req.file) {
+      try {
+        const result = await cloudinary.uploader.upload(req.file.path, {
+          folder: "heq_mojtama/avatars", // اسم المجلد داخل Cloudinary
+          public_id: `avatar_${req.user.id}`, // اسم مميز للملف (يستبدل الصورة القديمة بنفس الاسم)
+          overwrite: true,
+          transformation: [ // تحويلات لتحسين الصورة
+            { width: 250, height: 250, gravity: "face", crop: "thumb" },
+            { fetch_format: "auto", quality: "auto" }
+          ]
+        });
+        newAvatarUrl = result.secure_url; // الرابط الآمن للصورة
+        setClauses.push(`avatar = $${params.length + 1}`);
+        params.push(newAvatarUrl);
+        
+        // حذف الملف المؤقت من خادم Render بعد رفعه بنجاح
+        fs.unlinkSync(req.file.path);
+
+      } catch (uploadError) {
+        console.error("❌ خطأ أثناء الرفع إلى Cloudinary:", uploadError);
+        // لا نوقف العملية، فقط نتجاهل تحديث الصورة
+      }
     }
 
-    if (setClauses.length === 0)
+    if (setClauses.length === 0) {
       return res.json({ ok: true, message: "لا توجد تغييرات للتحديث." });
+    }
 
     params.push(email);
     const query = `UPDATE users SET ${setClauses.join(", ")} WHERE email = $${params.length}`;
     await pool.query(query, params);
 
-    res.json({ ok: true, message: "✅ تم تحديث الملف الشخصي بنجاح" });
+    // نرسل رابط الصورة الجديد للواجهة الأمامية لتحديثها فوراً
+    res.json({ ok: true, message: "✅ تم تحديث الملف الشخصي بنجاح", newAvatarUrl });
+
   } catch (err) {
     console.error("❌ خطأ أثناء تحديث الملف الشخصي:", err);
     res.status(500).json({ error: "فشل تحديث البيانات" });
   }
 });
-
 // ====== جلب بيانات المستخدم الحالي ======
 app.get("/api/me", auth, async (req, res) => {
   try {
@@ -856,52 +876,69 @@ app.get("/api/posts", async (_req, res) => {
   }
 });
 
-// ====== إنشاء منشور جديد ======  
-app.post("/api/posts", auth, upload.single("image"), async (req, res) => {  
-  try {  
-    const { text } = req.body;  
-    const userId = req.user.id;  
-  
-    // 🧠 فحص الحظر أو التعطيل  
-    const userRes = await pool.query("SELECT disabled, lock_until FROM users WHERE id = $1", [userId]);  
-    const user = userRes.rows[0];  
-    if (!user)  
-      return res.status(404).json({ error: "المستخدم غير موجود" });  
-  
-    if (user.disabled)  
-      return res.status(403).json({ error: "🚫 حسابك معطّل. لا يمكنك النشر أو التفاعل." });  
-  
-    if (user.lock_until && user.lock_until > Date.now()) {  
-      const diffH = Math.ceil((user.lock_until - Date.now()) / (1000 * 60 * 60));  
-      return res.status(403).json({ error: `⏳ حسابك محظور مؤقتًا (${diffH} ساعة متبقية).` });  
-    }  
-  
-    if (!text && !req.file)  
-      return res.status(400).json({ error: "يرجى كتابة نص أو رفع صورة" });  
-  
-    let imagePath = null;  
-    if (req.file)  
-      imagePath = `${req.protocol}://${req.get("host")}/uploads/${req.file.filename}`;  
-  
-    const createdAt = Date.now();  
-    const result = await pool.query(  
-      `INSERT INTO posts (user_id, text, image, created_at)  
-       VALUES ($1, $2, $3, $4) RETURNING id`,  
-      [userId, text || "", imagePath, createdAt]  
-    );  
-  
-    res.json({  
-      ok: true,  
-      id: result.rows[0].id,  
-      message: "✅ تم نشر المنشور بنجاح",  
-      image: imagePath  
-    });  
-  } catch (err) {  
-    console.error("❌ فشل إنشاء المنشور:", err);  
-    res.status(500).json({ error: "فشل إنشاء المنشور" });  
-  }  
-});  
-  
+// ====== إنشاء منشور جديد ======
+app.post("/api/posts", auth, upload.single("image"), async (req, res) => {
+  try {
+    const { text } = req.body;
+    const userId = req.user.id;
+
+    // 🧠 فحص الحظر أو التعطيل
+    const userRes = await pool.query("SELECT disabled, lock_until FROM users WHERE id = $1", [userId]);
+    const user = userRes.rows[0];
+    if (!user)
+      return res.status(404).json({ error: "المستخدم غير موجود" });
+
+    if (user.disabled)
+      return res.status(403).json({ error: "🚫 حسابك معطّل. لا يمكنك النشر أو التفاعل." });
+
+    if (user.lock_until && user.lock_until > Date.now()) {
+      const diffH = Math.ceil((user.lock_until - Date.now()) / (1000 * 60 * 60));
+      return res.status(403).json({ error: `⏳ حسابك محظور مؤقتًا (${diffH} ساعة متبقية).` });
+    }
+
+    if (!text && !req.file)
+      return res.status(400).json({ error: "يرجى كتابة نص أو رفع صورة" });
+
+    let imageUrl = null;
+    // ✨ منطق الرفع الجديد إلى Cloudinary
+    if (req.file) {
+      try {
+        const result = await cloudinary.uploader.upload(req.file.path, {
+          folder: "heq_mojtama/posts", // مجلد خاص بصور المنشورات
+          transformation: [ // تحويلات لتحسين الصورة
+            { width: 1080, crop: "limit" }, // تحديد أقصى عرض للصورة
+            { fetch_format: "auto", quality: "auto" }
+          ]
+        });
+        imageUrl = result.secure_url;
+        
+        // حذف الملف المؤقت من خادم Render بعد رفعه بنجاح
+        fs.unlinkSync(req.file.path);
+
+      } catch (uploadError) {
+        console.error("❌ خطأ أثناء رفع صورة المنشور:", uploadError);
+        return res.status(500).json({ error: "فشل في معالجة الصورة" });
+      }
+    }
+
+    const createdAt = Date.now();
+    const result = await pool.query(
+      `INSERT INTO posts (user_id, text, image, created_at)
+       VALUES ($1, $2, $3, $4) RETURNING id`,
+      [userId, text || "", imageUrl, createdAt]
+    );
+
+    res.json({
+      ok: true,
+      id: result.rows[0].id,
+      message: "✅ تم نشر المنشور بنجاح",
+      image: imageUrl // إرجاع رابط Cloudinary
+    });
+  } catch (err) {
+    console.error("❌ فشل إنشاء المنشور:", err);
+    res.status(500).json({ error: "فشل إنشاء المنشور" });
+  }
+});
 // ====== إنشاء تعليق جديد ======  
 app.post("/api/comments", auth, async (req, res) => {  
   try {  
@@ -2140,6 +2177,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
