@@ -911,7 +911,7 @@ app.get("/api/posts", async (_req, res) => {
         u.rank_tier AS author_tier,
         u.flames AS author_flames
       FROM posts p
-      JOIN users u ON u.id = p.user_id
+      LEFT JOIN users u ON u.id = p.user_id
       ORDER BY p.created_at DESC
     `);
 
@@ -1078,7 +1078,7 @@ app.get("/api/comments/:postId", async (req, res) => {
         u.rank_tier AS author_tier,
         u.flames AS author_flames
       FROM comments c
-      JOIN users u ON u.id = c.user_id
+      LEFT JOIN users u ON u.id = c.user_id
       WHERE c.post_id = $1
       ORDER BY c.created_at ASC
     `, [postId]);
@@ -2235,6 +2235,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
