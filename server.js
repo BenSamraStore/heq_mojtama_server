@@ -1,6 +1,4 @@
-// ─────────────────────────────────────────
-// HEQ Server (PG version) — bootstrap + schema
-// ─────────────────────────────────────────
+
 const express = require("express");
 const cors = require("cors");
 const bcrypt = require("bcryptjs");
@@ -2189,6 +2187,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
