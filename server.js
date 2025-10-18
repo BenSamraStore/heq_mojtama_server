@@ -1451,7 +1451,7 @@ app.get("/api/admin/posts", auth, requireAdmin, async (req, res) => {
   try {
     const { rows } = await pool.query(`
       SELECT p.id, p.user_id, u.name AS author_name, p.text, p.image, p.agree, p.disagree, p.created_at
-      FROM posts p JOIN users u ON u.id = p.user_id
+      FROM posts p LEFT JOIN users u ON u.id = p.user_id
       ORDER BY p.created_at DESC
     `);
     res.json({ ok: true, posts: rows });
@@ -1485,8 +1485,8 @@ app.get("/api/admin/reports", auth, requireAdmin, async (req, res) => {
     const { rows } = await pool.query(`
       SELECT r.*, u.name AS reporter_name, p.text AS post_text
       FROM reports r
-      JOIN users u ON u.id = r.user_id
-      JOIN posts p ON p.id = r.post_id
+      LEFT JOIN users u ON u.id = r.user_id
+      LEFT JOIN posts p ON p.id = r.post_id
       ORDER BY r.created_at DESC
     `);
     res.json({ ok: true, reports: rows });
@@ -2235,6 +2235,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
