@@ -784,34 +784,35 @@ app.get("/api/me", auth, async (req, res) => {
     if (!rows.length)
       return res.status(404).json({ error: "المستخدم غير موجود" });
 
-    const row = rows[0];
+    const user = rows[0];
     const profileCompleted = Boolean(
-      (row.bio && row.bio.trim().length > 0) ||
-      (row.avatar && row.avatar.trim().length > 0) ||
-      (row.country && row.country.trim().length > 0) ||
-      (row.residence && row.residence.trim().length > 0)
+      (user.bio && user.bio.trim().length > 0) ||
+      (user.avatar && user.avatar.trim().length > 0) ||
+      (user.country && user.country.trim().length > 0) ||
+      (user.residence && user.residence.trim().length > 0)
     );
 
-    const safeEmail = row.show_email ? row.email : "";
+    const safeEmail = user.show_email ? user.email : "";
 
     return res.json({
       ok: true,
       user: {
-        id: row.id,
-        heq_id: row.heq_id,
+        id: user.id,
+        heq_id: user.heq_id,
         email: safeEmail,
-        name: row.name,
-        bio: row.bio,
-        avatar: row.avatar,
-        country: row.country,
-        residence: row.residence,
-        age: row.age,
-        gender: row.gender,
-        joined_at: row.joined_at,
-        show_email: row.show_email,
-        faith_rank: row.faith_rank,
-        flames: row.flames,
-        rank_tier: row.rank_tier
+        name: user.name,
+        bio: user.bio,
+        avatar: user.avatar,
+        country: user.country,
+        residence: user.residence,
+        age: user.age,
+        gender: user.gender,
+        // ✨ التحويل إلى رقم
+        joined_at: parseInt(user.joined_at, 10),
+        show_email: user.show_email,
+        faith_rank: user.faith_rank,
+        flames: user.flames,
+        rank_tier: user.rank_tier
       },
       profileCompleted
     });
@@ -835,7 +836,14 @@ app.get("/api/posts", async (_req, res) => {
       JOIN users u ON u.id = p.user_id
       ORDER BY p.created_at DESC
     `);
-    res.json({ ok: true, posts: rows });
+
+    // ✨ التحويل إلى أرقام
+    const posts = rows.map(post => ({
+      ...post,
+      created_at: parseInt(post.created_at, 10)
+    }));
+
+    res.json({ ok: true, posts: posts });
   } catch (err) {
     console.error("❌ خطأ في جلب المنشورات:", err);
     res.status(500).json({ error: "خطأ في جلب المنشورات" });
@@ -980,7 +988,13 @@ app.get("/api/comments/:postId", async (req, res) => {
       ORDER BY c.created_at ASC
     `, [postId]);
 
-    res.json({ ok: true, comments: rows });
+    // ✨ التحويل إلى أرقام
+    const comments = rows.map(comment => ({
+      ...comment,
+      created_at: parseInt(comment.created_at, 10)
+    }));
+
+    res.json({ ok: true, comments: comments });
   } catch (err) {
     console.error("❌ خطأ في جلب التعليقات:", err);
     res.status(500).json({ error: "فشل في جلب التعليقات" });
@@ -2120,6 +2134,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
