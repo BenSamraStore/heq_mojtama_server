@@ -9,8 +9,14 @@ const fs = require("fs");
 const path = require("path");
 const multer = require("multer");
 const { Pool } = require("pg");
-
+const cloudinary = require("cloudinary").v2;
 const app = express();
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+  secure: true, 
+});
 
 // ✅ متغيرات البيئة
 const PORT = process.env.PORT;
@@ -2134,6 +2140,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
