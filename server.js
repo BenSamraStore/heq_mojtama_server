@@ -2282,9 +2282,10 @@ app.get("/api/companion/me", auth, async (req, res) => {
   }
 });
 
+
 // 📌 مسار تحديث معلومات الرفيق (XP)
 app.post('/api/companion/update', async (req, res) => {
-    const userId = req.session.userId; // أو req.user.id إذا كنت تستخدم الـ auth middleware
+    const userId = req.session.userId; // افتراض أن لديك جلسة مستخدم
     if (!userId) {
         return res.status(401).json({ message: 'Authorization required.' });
     }
@@ -2296,18 +2297,22 @@ app.post('/api/companion/update', async (req, res) => {
 
     try {
         // 1. جلب معلومات الرفيق الحالية
-        const { rows } = await pool.query( // تأكد من استخدام pool.query حسب إعداد خادمك
-            'SELECT xp, level, evolution_stage FROM companion WHERE user_id = $1', 
+        // نستخدم علامات الاستفهام '?' لـ MySQL
+        let companionResult = await db.query( 
+            'SELECT xp, level, evolution_stage, visits_count FROM companion WHERE user_id = ?', 
             [userId]
         );
-        let companion = rows[0] || { xp: 0, level: 1, evolution_stage: 1 };
+        // تأكد من أن الرد يحتوي على الصفوف (مثل companionResult[0][0] أو companionResult[0])
+        // هنا نفترض أنها مصفوفة من الصفوف، و الصف الأول هو البيانات
+        let companion = companionResult[0] ? companionResult[0][0] : { xp: 0, level: 1, evolution_stage: 1, visits_count: 0 };
         
         let newXP = companion.xp + xp_earned;
         let newLevel = companion.level;
         let newEvolutionStage = companion.evolution_stage;
+        let newVisitsCount = companion.visits_count + 1; // زيادة عدد الإكمالات
         let leveledUp = false;
 
-        // 2. منطق رفع المستوى (مثال بسيط: 100 XP لكل مستوى)
+        // 2. منطق رفع المستوى
         const XP_NEEDED_FOR_LEVEL_UP = 100;
 
         while (newXP >= XP_NEEDED_FOR_LEVEL_UP) {
@@ -2315,7 +2320,7 @@ app.post('/api/companion/update', async (req, res) => {
             newLevel++;
             leveledUp = true;
 
-            // 3. منطق التطور (مثال: التطور في المستوى 5 و 10)
+            // 3. منطق التطور (التطور في المستوى 5 و 10)
             if (newLevel === 5) {
                 newEvolutionStage = 2; // التطور الأول
             } else if (newLevel === 10) {
@@ -2323,10 +2328,10 @@ app.post('/api/companion/update', async (req, res) => {
             }
         }
 
-        // 4. تحديث جدول الرفيق
-        await pool.query(
-            'UPDATE companion SET xp = $1, level = $2, evolution_stage = $3 WHERE user_id = $4',
-            [newXP, newLevel, newEvolutionStage, userId]
+        // 4. تحديث جدول الرفيق - استخدام علامات الاستفهام '?' لـ MySQL
+        await db.query(
+            'UPDATE companion SET xp = ?, level = ?, evolution_stage = ?, visits_count = ? WHERE user_id = ?',
+            [newXP, newLevel, newEvolutionStage, newVisitsCount, userId]
         );
         
         // 5. إرسال استجابة بنجاح
@@ -2335,7 +2340,8 @@ app.post('/api/companion/update', async (req, res) => {
             new_xp: newXP, 
             new_level: newLevel,
             new_evolution_stage: newEvolutionStage,
-            leveled_up: leveledUp
+            leveled_up: leveledUp,
+            new_visits_count: newVisitsCount
         });
 
     } catch (err) {
@@ -2353,6 +2359,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
