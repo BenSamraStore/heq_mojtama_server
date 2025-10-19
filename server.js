@@ -320,6 +320,21 @@ console.log("📩 جداول pending_users و otp_codes جاهزة");
         created_at BIGINT NOT NULL
       )
     `);
+    //  (الشعلة الحيّة/العقاب/الفينيق)
+    await runQuery(`
+      CREATE TABLE IF NOT EXISTS companion (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE UNIQUE,
+        xp INTEGER DEFAULT 0,                 
+        level INTEGER DEFAULT 1,             
+        evolution_stage TEXT DEFAULT 'egg',   
+        current_companion TEXT DEFAULT 'phoenix',
+        last_activity BIGINT DEFAULT 0,      
+        last_visit_check BIGINT DEFAULT 0,   
+        visits_count INTEGER DEFAULT 0       
+      )
+    `);
+    console.log("🔥 جدول companion جاهز");
     
 // saved_posts
 await runQuery(`
@@ -2225,6 +2240,47 @@ async function sendEmailBrevo(to, subject, html) {
     console.error("🚫 خطأ في الاتصال بـ Brevo:", err);
   }
 }
+// 📌 المسار 2: جلب بيانات الشعلات والرفيق للمستخدم الحالي
+app.get("/api/companion/me", auth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    // جلب بيانات الشعلات والرفيق
+    const { rows: compRows } = await pool.query(
+      `SELECT xp, level, evolution_stage, current_companion, visits_count FROM companion WHERE user_id = $1`,
+      [userId]
+    );
+
+   
+    const { rows: userRows } = await pool.query(
+        `SELECT heq_id, name, flames, faith_rank, rank_tier, joined_at FROM users WHERE id = $1`,
+        [userId]
+    );
+    
+    
+    let companionData = compRows.length > 0 ? compRows[0] : null;
+    if (!companionData) {
+        await pool.query(
+            `INSERT INTO companion (user_id, xp, level, evolution_stage) VALUES ($1, 0, 1, 'egg')`,
+            [userId]
+        );
+        companionData = { xp: 0, level: 1, evolution_stage: 'egg', current_companion: 'phoenix', visits_count: 0 };
+    }
+
+    if (!userRows.length)
+        return res.status(404).json({ error: "المستخدم غير موجود" });
+
+    res.json({
+        ok: true,
+        user: userRows[0],
+        companion: companionData
+    });
+
+  } catch (err) {
+    console.error("❌ خطأ في جلب بيانات الرفيق:", err);
+    res.status(500).json({ error: "فشل جلب بيانات الرفيق" });
+  }
+});
 // =======================================
 // 🧠 Health check + تشغيل السيرفر
 // =======================================
@@ -2235,6 +2291,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
