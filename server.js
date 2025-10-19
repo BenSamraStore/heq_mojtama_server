@@ -2281,6 +2281,68 @@ app.get("/api/companion/me", auth, async (req, res) => {
     res.status(500).json({ error: "فشل جلب بيانات الرفيق" });
   }
 });
+
+// 📌 مسار تحديث معلومات الرفيق (XP)
+app.post('/api/companion/update', async (req, res) => {
+    const userId = req.session.userId; // أو req.user.id إذا كنت تستخدم الـ auth middleware
+    if (!userId) {
+        return res.status(401).json({ message: 'Authorization required.' });
+    }
+
+    const { xp_earned } = req.body;
+    if (typeof xp_earned !== 'number' || xp_earned <= 0) {
+        return res.status(400).json({ message: 'Invalid XP amount.' });
+    }
+
+    try {
+        // 1. جلب معلومات الرفيق الحالية
+        const { rows } = await pool.query( // تأكد من استخدام pool.query حسب إعداد خادمك
+            'SELECT xp, level, evolution_stage FROM companion WHERE user_id = $1', 
+            [userId]
+        );
+        let companion = rows[0] || { xp: 0, level: 1, evolution_stage: 1 };
+        
+        let newXP = companion.xp + xp_earned;
+        let newLevel = companion.level;
+        let newEvolutionStage = companion.evolution_stage;
+        let leveledUp = false;
+
+        // 2. منطق رفع المستوى (مثال بسيط: 100 XP لكل مستوى)
+        const XP_NEEDED_FOR_LEVEL_UP = 100;
+
+        while (newXP >= XP_NEEDED_FOR_LEVEL_UP) {
+            newXP -= XP_NEEDED_FOR_LEVEL_UP;
+            newLevel++;
+            leveledUp = true;
+
+            // 3. منطق التطور (مثال: التطور في المستوى 5 و 10)
+            if (newLevel === 5) {
+                newEvolutionStage = 2; // التطور الأول
+            } else if (newLevel === 10) {
+                newEvolutionStage = 3; // التطور الثاني
+            }
+        }
+
+        // 4. تحديث جدول الرفيق
+        await pool.query(
+            'UPDATE companion SET xp = $1, level = $2, evolution_stage = $3 WHERE user_id = $4',
+            [newXP, newLevel, newEvolutionStage, userId]
+        );
+        
+        // 5. إرسال استجابة بنجاح
+        res.json({ 
+            message: 'XP updated successfully.', 
+            new_xp: newXP, 
+            new_level: newLevel,
+            new_evolution_stage: newEvolutionStage,
+            leveled_up: leveledUp
+        });
+
+    } catch (err) {
+        console.error('Error updating companion XP:', err);
+        res.status(500).json({ message: 'Server error while updating companion XP.' });
+    }
+});
 // =======================================
 // 🧠 Health check + تشغيل السيرفر
 // =======================================
@@ -2291,6 +2353,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
