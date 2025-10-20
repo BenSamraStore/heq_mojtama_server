@@ -2111,21 +2111,55 @@ app.post("/api/faith/check_reset", auth, async (req, res) => {
   }
 });
 
-// 🛰️ إرجاع حالة الإيمان (الشعلات والشارة)
+// 🛰️ إرجاع حالة الإيمان (الشعلات والشارة والرفيق) - تم توحيده ليتضمن الرفيق
 app.get("/api/faith/status", auth, async (req, res) => {
-  try {
-    const { rows } = await pool.query(
-      `SELECT flames AS total_flames, faith_rank AS rank 
-       FROM users WHERE id=$1`,
-      [req.user.id]
-    );
-    if (!rows.length)
-      return res.json({ ok: false, error: "User not found" });
-    res.json({ ok: true, status: rows[0] });
-  } catch (err) {
-    console.error("faith/status:", err);
-    res.json({ ok: false, error: "Server error" });
-  }
+    try {
+        const userId = req.user.id;
+        if (!userId) return res.status(401).json({ error: "جلسة غير صالحة" });
+
+        // 1. جلب بيانات المستخدم (الشعلات والترتيب)
+        const userRes = await pool.query( // استخدام pool.query
+            `SELECT flames AS total_flames, faith_rank AS rank 
+             FROM users WHERE id = $1`,
+            [userId]
+        );
+        const userStatus = userRes.rows[0];
+
+        if (!userStatus) return res.json({ ok: false, error: "User not found" });
+
+        // 2. جلب بيانات الرفيق
+        let companion = null;
+        const companionRes = await pool.query( // استخدام pool.query
+            `SELECT xp, level, evolution_stage, visits_count 
+             FROM companion WHERE user_id = $1`,
+            [userId]
+        );
+
+        // 💡 إذا لم يكن هناك رفيق، نقوم بإنشاء واحد تلقائياً
+        if (companionRes.rows.length === 0) {
+            // إنشاء رفيق ابتدائي
+            await pool.query( // استخدام pool.query
+                `INSERT INTO companion (user_id) VALUES ($1)`,
+                [userId]
+            );
+            companion = { xp: 0, level: 1, evolution_stage: 1, visits_count: 0 };
+        } else {
+            companion = companionRes.rows[0];
+        }
+
+        // 3. إرسال البيانات المجمعة
+        return res.json({
+            ok: true,
+            status: {
+                ...userStatus,
+                companion: companion // ⬅️ إضافة بيانات الرفيق إلى الرد
+            }
+        });
+
+    } catch (err) {
+        console.error("faith/status:", err);
+        res.json({ ok: false, error: "Server error" });
+    }
 });
 
 // ✅ تغيير كلمة المرور
@@ -2240,52 +2274,9 @@ async function sendEmailBrevo(to, subject, html) {
     console.error("🚫 خطأ في الاتصال بـ Brevo:", err);
   }
 }
-// 📌 المسار 2: جلب بيانات الشعلات والرفيق للمستخدم الحالي
-app.get("/api/companion/me", auth, async (req, res) => {
-  try {
+// ====== تحديث نقاط خبرة الرفيق (XP) ======
+app.post('/api/companion/update', auth, async (req, res) => {
     const userId = req.user.id;
-
-    // جلب بيانات الشعلات والرفيق
-    const { rows: compRows } = await pool.query(
-      `SELECT xp, level, evolution_stage, current_companion, visits_count FROM companion WHERE user_id = $1`,
-      [userId]
-    );
-
-   
-    const { rows: userRows } = await pool.query(
-        `SELECT heq_id, name, flames, faith_rank, rank_tier, joined_at FROM users WHERE id = $1`,
-        [userId]
-    );
-    
-    
-    let companionData = compRows.length > 0 ? compRows[0] : null;
-    if (!companionData) {
-        await pool.query(
-            `INSERT INTO companion (user_id, xp, level, evolution_stage) VALUES ($1, 0, 1, 'egg')`,
-            [userId]
-        );
-        companionData = { xp: 0, level: 1, evolution_stage: 'egg', current_companion: 'phoenix', visits_count: 0 };
-    }
-
-    if (!userRows.length)
-        return res.status(404).json({ error: "المستخدم غير موجود" });
-
-    res.json({
-        ok: true,
-        user: userRows[0],
-        companion: companionData
-    });
-
-  } catch (err) {
-    console.error("❌ خطأ في جلب بيانات الرفيق:", err);
-    res.status(500).json({ error: "فشل جلب بيانات الرفيق" });
-  }
-});
-
-
-// 📌 مسار تحديث معلومات الرفيق (XP)
-app.post('/api/companion/update', async (req, res) => {
-    const userId = req.session.userId; // افتراض أن لديك جلسة مستخدم
     if (!userId) {
         return res.status(401).json({ message: 'Authorization required.' });
     }
@@ -2297,14 +2288,16 @@ app.post('/api/companion/update', async (req, res) => {
 
     try {
         // 1. جلب معلومات الرفيق الحالية
-        // نستخدم علامات الاستفهام '?' لـ MySQL
-        let companionResult = await db.query( 
-            'SELECT xp, level, evolution_stage, visits_count FROM companion WHERE user_id = ?', 
+        let companionResult = await pool.query( 
+            'SELECT xp, level, evolution_stage, visits_count FROM companion WHERE user_id = $1', 
             [userId]
         );
-        // تأكد من أن الرد يحتوي على الصفوف (مثل companionResult[0][0] أو companionResult[0])
-        // هنا نفترض أنها مصفوفة من الصفوف، و الصف الأول هو البيانات
-        let companion = companionResult[0] ? companionResult[0][0] : { xp: 0, level: 1, evolution_stage: 1, visits_count: 0 };
+        
+        let companion = companionResult.rows[0];
+        if (!companion) {
+             await pool.query(`INSERT INTO companion (user_id) VALUES ($1)`, [userId]);
+             companion = { xp: 0, level: 1, evolution_stage: 1, visits_count: 0 };
+        }
         
         let newXP = companion.xp + xp_earned;
         let newLevel = companion.level;
@@ -2328,9 +2321,9 @@ app.post('/api/companion/update', async (req, res) => {
             }
         }
 
-        // 4. تحديث جدول الرفيق - استخدام علامات الاستفهام '?' لـ MySQL
-        await db.query(
-            'UPDATE companion SET xp = ?, level = ?, evolution_stage = ?, visits_count = ? WHERE user_id = ?',
+        // 4. تحديث جدول الرفيق - استخدام $1, $2, ... لـ PostgreSQL
+        await pool.query(
+            'UPDATE companion SET xp = $1, level = $2, evolution_stage = $3, visits_count = $4 WHERE user_id = $5',
             [newXP, newLevel, newEvolutionStage, newVisitsCount, userId]
         );
         
@@ -2359,6 +2352,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
