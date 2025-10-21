@@ -881,14 +881,14 @@ app.get("/api/me", auth, async (req, res) => {
     return res.status(401).json({ error: "البريد الإلكتروني مفقود في التوثيق." });
   }
   try {
-    // الاستعلام الجديد مع LEFT JOIN لربط المستخدم بجدول الرفيق (companion)
+    // الاستعلام المصحح مع COALESCE لتعيين قيم افتراضية لجدول companion
     const { rows } = await pool.query(
       `SELECT
           u.id, u.heq_id, u.email, u.name, u.bio, u.avatar, u.country, u.residence, u.age, u.gender, 
           u.joined_at, u.display_count, u.flames, u.faith_rank, u.last_faith_activity, u.rank_tier, 
           u.show_email, u.is_admin,
 
-          -- بيانات الرفيق (استخدم COALESCE للتعامل مع NULL في حال عدم وجود سجل في Companion)
+          -- بيانات الرفيق (استخدم COALESCE لضمان أن تكون القيم 0 أو 1 بدلاً من NULL)
           COALESCE(c.xp, 0) AS xp, 
           COALESCE(c.level, 1) AS level, 
           COALESCE(c.evolution_stage, 'egg') AS evolution_stage, 
@@ -1727,13 +1727,14 @@ app.get("/api/users/:id", auth, async (req, res) => {
   }
 
   try {
+    // الاستعلام المصحح مع COALESCE لتعيين قيم افتراضية لجدول companion
     const { rows } = await pool.query(
       `SELECT
           u.id, u.heq_id, u.email, u.name, u.bio, u.avatar, u.country, u.residence, u.age, u.gender, 
           u.joined_at, u.display_count, u.flames, u.faith_rank, u.last_faith_activity, u.rank_tier, 
           u.show_email,
 
-          -- بيانات الرفيق (استخدم COALESCE للتعامل مع NULL في حال عدم وجود سجل في Companion)
+          -- بيانات الرفيق (استخدم COALESCE لضمان أن تكون القيم 0 أو 1 بدلاً من NULL)
           COALESCE(c.xp, 0) AS xp, 
           COALESCE(c.level, 1) AS level, 
           COALESCE(c.evolution_stage, 'egg') AS evolution_stage, 
@@ -1758,7 +1759,7 @@ app.get("/api/users/:id", auth, async (req, res) => {
 
     const user = rows[0];
 
-    // إضافة حقل محسوب للـ XP المتبقي
+    // إضافة حقل محسوب للـ XP المتبقي (مفيد للواجهة الأمامية)
     user.xp_required = user.xp_to_next_level - user.xp;
 
     // إزالة الإيميل إذا لم يطلب المستخدم إظهاره
@@ -1766,9 +1767,9 @@ app.get("/api/users/:id", auth, async (req, res) => {
       delete user.email;
     }
     
-    // إزالة الحقول الداخلية
+    // إزالة الحقول الداخلية التي لا يجب أن تظهر لأي مستخدم (للملف الشخصي العام)
     delete user.show_email; 
-    delete user.xp_to_next_level; // هذا الحقل يجب ألا يظهر في الرد النهائي للملفات العامة
+    delete user.xp_to_next_level; 
     
     res.json(user);
 
@@ -2482,6 +2483,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
