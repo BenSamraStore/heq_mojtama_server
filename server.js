@@ -320,6 +320,17 @@ console.log("📩 جداول pending_users و otp_codes جاهزة");
         created_at BIGINT NOT NULL
       )
     `);
+    // profile_visits_log (يسجل آخر زيارة لزوج زائر/مزار لمنع تكرار العد اليومي)
+    await runQuery(`
+      CREATE TABLE IF NOT EXISTS profile_visits_log (
+        id SERIAL PRIMARY KEY,
+        visitor_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        visited_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        last_visit_at BIGINT NOT NULL,
+        UNIQUE (visitor_id, visited_id) 
+      )
+    `);
+    console.log("👤 جدول profile_visits_log جاهز");
     //  (الشعلة الحيّة/العقاب/الفينيق)
     await runQuery(`
       CREATE TABLE IF NOT EXISTS companion (
@@ -2342,9 +2353,84 @@ app.post('/api/companion/update', auth, async (req, res) => {
         res.status(500).json({ message: 'Server error while updating companion XP.' });
     }
 });
-// =======================================
-// 🧠 Health check + تشغيل السيرفر
-// =======================================
+
+// Companion / Profile Visits
+// ====== تسجيل زيارة للملف الشخصي (لزيادة عداد visits_count للرفيق) ======
+app.post("/api/profile/visit/:targetId", auth, async (req, res) => {
+    const targetId = parseInt(req.params.targetId);
+    const visitorId = req.user.id;
+    const now = Date.now();
+    const VISIT_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 24 ساعة فترة تبريد بين الزيارات
+
+    if (isNaN(targetId) || targetId <= 0) {
+        return res.status(400).json({ error: "معرّف المستخدم الهدف غير صحيح." });
+    }
+
+    // 1. لا تسجل الزيارة إذا كان الزائر هو صاحب الملف الشخصي
+    if (targetId === visitorId) {
+        return res.json({ ok: true, message: "الزيارة من المالك، تم التخطي." });
+    }
+
+    try {
+        // 2. التحقق من آخر زيارة مسجلة بين الزائر والمزار
+        const logRes = await runQuery(
+            `SELECT last_visit_at FROM profile_visits_log WHERE visitor_id = $1 AND visited_id = $2`,
+            [visitorId, targetId]
+        );
+
+        let shouldCountVisit = true;
+        let lastVisitAt = 0;
+
+        if (logRes.rows.length > 0) {
+            lastVisitAt = logRes.rows[0].last_visit_at;
+            if (now - lastVisitAt < VISIT_COOLDOWN_MS) {
+                // الزيارة مسجلة خلال فترة التبريد (24 ساعة)، لا تقم بالعد.
+                shouldCountVisit = false;
+            }
+        }
+
+        if (!shouldCountVisit) {
+            return res.json({ ok: true, message: "تم تسجيل هذه الزيارة مسبقاً خلال الـ 24 ساعة." });
+        }
+
+        // 3. تحديث أو إدراج سجل الزيارة في profile_visits_log
+        await runQuery(
+            `INSERT INTO profile_visits_log (visitor_id, visited_id, last_visit_at)
+             VALUES ($1, $2, $3)
+             ON CONFLICT (visitor_id, visited_id) DO UPDATE SET last_visit_at = EXCLUDED.last_visit_at`,
+            [visitorId, targetId, now]
+        );
+
+        // 4. زيادة عداد visits_count في جدول companion للمستخدم الهدف
+        const updateRes = await runQuery(
+            `UPDATE companion
+             SET visits_count = visits_count + 1, last_visit_check = $1
+             WHERE user_id = $2
+             RETURNING visits_count`,
+            [now, targetId]
+        );
+
+        // 5. إنشاء سجل للـ companion إذا لم يكن موجوداً (للمستخدمين القدامى)
+        if (updateRes.rowCount === 0) {
+            await runQuery(
+                `INSERT INTO companion (user_id, visits_count, last_activity, last_visit_check)
+                 VALUES ($1, 1, $2, $3)`,
+                [targetId, now, now]
+            );
+        }
+
+        console.log(`👤 تم تسجيل زيارة جديدة من ${visitorId} إلى الملف الشخصي ${targetId}.`);
+
+        res.json({ ok: true, message: "✅ تم تسجيل زيارة الملف الشخصي بنجاح." });
+    } catch (err) {
+        console.error("❌ خطأ أثناء تسجيل زيارة الملف الشخصي:", err.message);
+        res.status(500).json({ error: "فشل في تسجيل الزيارة." });
+    }
+});
+
+
+//  Health check  تشغيل السيرفر
+
 app.get("/", (_, res) => {
   res.json({ ok: true, message: "🚀 HEQ server is running smoothly!" });
 });
@@ -2352,6 +2438,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
