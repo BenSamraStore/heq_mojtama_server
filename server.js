@@ -955,7 +955,6 @@ app.get("/api/me", auth, async (req, res) => {
     res.status(500).json({ error: "فشل جلب بيانات المستخدم" });
   }
 });
-
 // ====== جلب جميع المنشورات (عام) ======
 app.get("/api/posts", async (_req, res) => {
   try {
@@ -2520,67 +2519,6 @@ app.post("/api/profile/visit/:targetId", auth, async (req, res) => {
         res.status(500).json({ error: "فشل في تسجيل الزيارة." });
     }
 });
-// =======================================
-// ====== جلب بيانات الرفيق و Visits_Count للمستخدم الحالي فقط ======
-// =======================================
-app.get("/api/me/companion", auth, async (req, res) => {
-  const userId = req.user.id; // نعتمد على id الذي يوفره الـ middleware
-  if (!userId) {
-    return res.status(401).json({ error: "معرف المستخدم مفقود." });
-  }
-
-  try {
-    // الاستعلام الآمن مع COALESCE للتعامل مع قيم الـ NULL في جدول companion
-    const { rows } = await pool.query(
-      `SELECT
-          COALESCE(c.xp, 0) AS xp, 
-          COALESCE(c.level, 1) AS level, 
-          COALESCE(c.evolution_stage, 1) AS evolution_stage, -- ✅ نستخدم 1 كقيمة افتراضية للمرحلة (رقم)
-          COALESCE(c.current_companion, 'phoenix') AS current_companion, 
-          COALESCE(c.visits_count, 0) AS visits_count,
-          
-          -- حساب XP اللازمة للمستوى التالي
-          (CASE 
-              WHEN COALESCE(c.level, 1) < 10 THEN (COALESCE(c.level, 1) * 100) 
-              WHEN COALESCE(c.level, 1) = 10 THEN 1000 
-              ELSE 1000 
-          END) AS xp_to_next_level 
-      FROM users u
-      LEFT JOIN companion c ON u.id = c.user_id
-      WHERE u.id = $1`,
-      [userId]
-    );
-
-    if (!rows.length) {
-       // قد لا يكون للمستخدم سجل في جدول users، ولكن هذا غير محتمل بعد التوثيق
-       return res.status(404).json({ error: "لم يتم العثور على بيانات الرفيق للمستخدم." });
-    }
-
-    const data = rows[0];
-
-    // تجميع البيانات
-    const companionData = {
-        xp: data.xp,
-        level: data.level,
-        evolution_stage: data.evolution_stage,
-        visits_count: data.visits_count,
-        current_companion: data.current_companion,
-        xp_to_next_level: data.xp_to_next_level,
-        xp_required: data.xp_to_next_level - data.xp,
-    };
-    
-    // إرسال البيانات مباشرة
-    return res.json({ 
-        ok: true,
-        companion: companionData
-    });
-
-  } catch (err) {
-    console.error("❌ خطأ أثناء جلب بيانات الرفيق (/api/me/companion):", err);
-    res.status(500).json({ error: "فشل في جلب بيانات الرفيق." });
-  }
-});
-
 
 //  Health check  تشغيل السيرفر
 
@@ -2591,8 +2529,6 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
-
-
 
 
 
