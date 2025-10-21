@@ -887,7 +887,7 @@ app.get("/api/me", auth, async (req, res) => {
           -- بيانات الرفيق (القيم الافتراضية)
           COALESCE(c.xp, 0) AS xp, 
           COALESCE(c.level, 1) AS level, 
-          COALESCE(c.evolution_stage, 1) AS evolution_stage, 
+          COALESCE(c.evolution_stage, '1') AS evolution_stage, 
           COALESCE(c.current_companion, 'phoenix') AS current_companion, 
           
           -- 🔥 جلب عدد الزيارات الحقيقي للمستخدم الحالي
@@ -1762,7 +1762,7 @@ app.get("/api/users/:id", async (req, res) => {
           -- بيانات الرفيق (القيم الافتراضية)
           COALESCE(c.xp, 0) AS xp, 
           COALESCE(c.level, 1) AS level, 
-          COALESCE(c.evolution_stage, 1) AS evolution_stage, -- ✅ نستخدم 1 كقيمة افتراضية (رقم)
+          COALESCE(c.evolution_stage, '1') AS evolution_stage, -- ✅ نستخدم 1 كقيمة افتراضية (رقم)
           COALESCE(c.current_companion, 'phoenix') AS current_companion, 
           
           -- لا نرسل visits_count هنا لحماية الخصوصية
@@ -2529,6 +2529,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
