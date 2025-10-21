@@ -872,59 +872,79 @@ app.post("/api/profile", auth, async (req, res) => { // ⏪ حذفنا upload.si
     res.status(500).json({ error: "فشل تحديث البيانات" });
   }
 });
-// ====== جلب بيانات المستخدم الحالي ======
+// =======================================
+// ====== جلب بيانات المستخدم الحالي (مع بيانات الرفيق) ======
+// =======================================
 app.get("/api/me", auth, async (req, res) => {
-  try {
-    const email = req.user && req.user.email;
-    if (!email) return res.status(401).json({ error: "جلسة غير صالحة" });
+    const email = req.user.email;
+    if (!email) {
+        return res.status(401).json({ error: "البريد الإلكتروني مفقود في التوثيق." });
+    }
 
-    const { rows } = await pool.query(
-      `SELECT id, heq_id, email, name, bio, avatar, country, residence, age, gender,
-              joined_at, show_email, faith_rank, flames, rank_tier
-       FROM users WHERE email = $1`,
-      [email]
-    );
+    try {
+        // الاستعلام الجديد مع LEFT JOIN لربط المستخدم بجدول الرفيق (companion)
+        const { rows } = await pool.query(
+            `SELECT 
+                u.id, u.heq_id, u.email, u.name, u.bio, u.avatar, u.country, u.residence, u.age, u.gender, u.joined_at, u.show_email, u.faith_rank, u.flames, u.rank_tier, 
+                c.xp, c.level, c.evolution_stage, c.visits_count, c.current_companion, c.xp_to_next_level 
+            FROM 
+                users u
+            LEFT JOIN 
+                companion c ON u.id = c.user_id
+            WHERE 
+                u.email = $1`,
+            [email]
+        );
 
-    if (!rows.length)
-      return res.status(404).json({ error: "المستخدم غير موجود" });
+        if (!rows.length) return res.status(404).json({ error: "المستخدم غير موجود" });
 
-    const user = rows[0];
-    const profileCompleted = Boolean(
-      (user.bio && user.bio.trim().length > 0) ||
-      (user.avatar && user.avatar.trim().length > 0) ||
-      (user.country && user.country.trim().length > 0) ||
-      (user.residence && user.residence.trim().length > 0)
-    );
+        const user = rows[0];
 
-    const safeEmail = user.show_email ? user.email : "";
+        // 🧠 تجميع بيانات الرفيق (Companion) في كائن واحد
+        const companionData = {
+            xp: user.xp || 0,
+            level: user.level || 1,
+            evolution_stage: user.evolution_stage || 1,
+            visits_count: user.visits_count || 0,
+            current_companion: user.current_companion || "phoenix",
+            xp_to_next_level: user.xp_to_next_level || 100, 
+        };
 
-    return res.json({
-      ok: true,
-      user: {
-        id: user.id,
-        heq_id: user.heq_id,
-        email: safeEmail,
-        name: user.name,
-        bio: user.bio,
-        avatar: user.avatar,
-        country: user.country,
-        residence: user.residence,
-        age: user.age,
-        gender: user.gender,
-        // ✨ التحويل إلى رقم
-        joined_at: parseInt(user.joined_at, 10),
-        show_email: user.show_email,
-        faith_rank: user.faith_rank,
-        flames: user.flames,
-        rank_tier: user.rank_tier
-      },
-      profileCompleted
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "فشل جلب بيانات المستخدم" });
-  }
+        // ... (منطق التحقق من اكتمال الملف الشخصي، افترضنا التحقق من الحقول الأساسية)
+        const profileCompleted = Boolean(user.name && user.bio && user.country && user.age && user.gender);
+
+        const safeEmail = user.show_email ? user.email : "مخفي";
+
+        return res.json({ 
+            ok: true, 
+            user: {
+                id: user.id,
+                heq_id: user.heq_id,
+                email: safeEmail,
+                name: user.name,
+                bio: user.bio,
+                avatar: user.avatar,
+                country: user.country,
+                residence: user.residence,
+                age: user.age,
+                gender: user.gender,
+                joined_at: parseInt(user.joined_at, 10),
+                show_email: user.show_email,
+                faith_rank: user.faith_rank,
+                flames: user.flames,
+                rank_tier: user.rank_tier,
+                // 🔥 إضافة الرفيق
+                companion: companionData 
+            }, 
+            profileCompleted 
+        });
+
+    } catch (err) {
+        console.error("خطأ أثناء جلب بيانات المستخدم:", err);
+        res.status(500).json({ error: "فشل داخلي في الخادم." });
+    }
 });
+
 // ====== جلب جميع المنشورات (عام) ======
 app.get("/api/posts", async (_req, res) => {
   try {
@@ -1712,29 +1732,77 @@ app.post("/api/notifications", auth, async (req, res) => {
   }
 });
 
-// ====== جلب مستخدم بالمعرّف ======
+// =======================================
+// ====== جلب بيانات ملف شخصي للمستخدمين الآخرين (مع بيانات الرفيق) ======
+// =======================================
 app.get("/api/users/:id", async (req, res) => {
-  try {
-    const userId = parseInt(req.params.id);
-    if (Number.isNaN(userId)) return res.json({ ok: false, error: "رقم مستخدم غير صالح" });
+    const targetId = parseInt(req.params.id);
+    if (isNaN(targetId) || targetId <= 0) {
+        return res.status(400).json({ error: "معرّف المستخدم غير صحيح." });
+    }
 
-    const { rows } = await pool.query(
-      `SELECT id, heq_id, name, email, bio, country, age, gender, avatar, show_email, faith_rank, flames, rank_tier
-       FROM users WHERE id = $1`,
-      [userId]
-    );
+    try {
+        // الاستعلام الجديد مع LEFT JOIN لربط المستخدم بجدول الرفيق (companion)
+        const { rows } = await pool.query(
+            `SELECT 
+                u.id, u.heq_id, u.email, u.name, u.bio, u.avatar, u.country, u.residence, u.age, u.gender, u.joined_at, u.show_email, u.faith_rank, u.flames, u.rank_tier, 
+                c.xp, c.level, c.evolution_stage, c.visits_count, c.current_companion, c.xp_to_next_level 
+            FROM 
+                users u
+            LEFT JOIN 
+                companion c ON u.id = c.user_id
+            WHERE 
+                u.id = $1`,
+            [targetId]
+        );
 
-    if (!rows.length) return res.json({ ok: false, error: "لم يتم العثور على المستخدم." });
+        if (!rows.length) return res.status(404).json({ error: "المستخدم غير موجود." });
 
-    const user = rows[0];
-    if (!user.show_email) user.email = null;
+        const user = rows[0];
+        
+        // 🧠 تجميع بيانات الرفيق (Companion) في كائن واحد
+        const companionData = {
+            xp: user.xp || 0,
+            level: user.level || 1,
+            evolution_stage: user.evolution_stage || 1, 
+            // ⚠️ ملاحظة هامة: عدد الزيارات يكون 0 للزوار، فقط المالك يراه حقيقياً
+            visits_count: 0, 
+            current_companion: user.current_companion || "phoenix",
+            xp_to_next_level: user.xp_to_next_level || 100, 
+        };
 
-    res.json({ ok: true, user });
-  } catch (err) {
-    console.error("get /users/:id:", err);
-    res.json({ ok: false, error: "خطأ في قاعدة البيانات" });
-  }
+        // إخفاء البريد إذا لم يختر المستخدم إظهاره
+        const safeEmail = user.show_email ? user.email : "مخفي";
+        
+        return res.json({ 
+            ok: true, 
+            user: {
+                id: user.id,
+                heq_id: user.heq_id,
+                email: safeEmail,
+                name: user.name,
+                bio: user.bio,
+                avatar: user.avatar,
+                country: user.country,
+                residence: user.residence,
+                age: user.age,
+                gender: user.gender,
+                joined_at: parseInt(user.joined_at, 10),
+                show_email: user.show_email,
+                faith_rank: user.faith_rank,
+                flames: user.flames,
+                rank_tier: user.rank_tier,
+                // 🔥 إضافة الرفيق (مع visits_count = 0 للزوار)
+                companion: companionData 
+            }
+        });
+
+    } catch (err) {
+        console.error("خطأ أثناء جلب بيانات الملف الشخصي:", err);
+        res.status(500).json({ error: "فشل داخلي في الخادم." });
+    }
 });
+
 // =========================================
 // 🔍 البحث عن المستخدمين بالاسم أو HEQ-ID
 // =========================================
@@ -2438,6 +2506,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
