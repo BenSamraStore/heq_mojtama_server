@@ -876,73 +876,58 @@ app.post("/api/profile", auth, async (req, res) => { // ⏪ حذفنا upload.si
 // ====== جلب بيانات المستخدم الحالي (مع بيانات الرفيق) ======
 // =======================================
 app.get("/api/me", auth, async (req, res) => {
-    const email = req.user.email;
-    if (!email) {
-        return res.status(401).json({ error: "البريد الإلكتروني مفقود في التوثيق." });
+  const email = req.user.email;
+  if (!email) {
+    return res.status(401).json({ error: "البريد الإلكتروني مفقود في التوثيق." });
+  }
+  try {
+    // الاستعلام الجديد مع LEFT JOIN لربط المستخدم بجدول الرفيق (companion)
+    const { rows } = await pool.query(
+      `SELECT
+          u.id, u.heq_id, u.email, u.name, u.bio, u.avatar, u.country, u.residence, u.age, u.gender, 
+          u.joined_at, u.display_count, u.flames, u.faith_rank, u.last_faith_activity, u.rank_tier, 
+          u.show_email, u.is_admin,
+
+          -- بيانات الرفيق (استخدم COALESCE للتعامل مع NULL في حال عدم وجود سجل في Companion)
+          COALESCE(c.xp, 0) AS xp, 
+          COALESCE(c.level, 1) AS level, 
+          COALESCE(c.evolution_stage, 'egg') AS evolution_stage, 
+          COALESCE(c.current_companion, 'phoenix') AS current_companion, 
+          COALESCE(c.visits_count, 0) AS visits_count,
+          
+          -- حساب XP اللازمة للمستوى التالي (الحقل المحسوب)
+          (CASE 
+              WHEN COALESCE(c.level, 1) < 10 THEN (COALESCE(c.level, 1) * 100) 
+              WHEN COALESCE(c.level, 1) = 10 THEN 1000 
+              ELSE 1000 
+          END) AS xp_to_next_level 
+      FROM users u
+      LEFT JOIN companion c ON u.id = c.user_id
+      WHERE u.email = $1`,
+      [email]
+    );
+
+    if (!rows.length) {
+      return res.status(404).json({ error: "لم يتم العثور على المستخدم." });
     }
 
-    try {
-        // الاستعلام الجديد مع LEFT JOIN لربط المستخدم بجدول الرفيق (companion)
-        const { rows } = await pool.query(
-            `SELECT 
-                u.id, u.heq_id, u.email, u.name, u.bio, u.avatar, u.country, u.residence, u.age, u.gender, u.joined_at, u.show_email, u.faith_rank, u.flames, u.rank_tier, 
-                c.xp, c.level, c.evolution_stage, c.visits_count, c.current_companion, c.xp_to_next_level 
-            FROM 
-                users u
-            LEFT JOIN 
-                companion c ON u.id = c.user_id
-            WHERE 
-                u.email = $1`,
-            [email]
-        );
+    const user = rows[0];
 
-        if (!rows.length) return res.status(404).json({ error: "المستخدم غير موجود" });
+    // إضافة حقل محسوب للـ XP المتبقي
+    user.xp_required = user.xp_to_next_level - user.xp;
+    
+    // إزالة المعلومات الحساسة
+    delete user.password;
+    delete user.lock_until;
+    delete user.failed_attempts;
+    delete user.disabled;
+    
+    res.json(user);
 
-        const user = rows[0];
-
-        // 🧠 تجميع بيانات الرفيق (Companion) في كائن واحد
-        const companionData = {
-            xp: user.xp || 0,
-            level: user.level || 1,
-            evolution_stage: user.evolution_stage || 1,
-            visits_count: user.visits_count || 0,
-            current_companion: user.current_companion || "phoenix",
-            xp_to_next_level: user.xp_to_next_level || 100, 
-        };
-
-        // ... (منطق التحقق من اكتمال الملف الشخصي، افترضنا التحقق من الحقول الأساسية)
-        const profileCompleted = Boolean(user.name && user.bio && user.country && user.age && user.gender);
-
-        const safeEmail = user.show_email ? user.email : "مخفي";
-
-        return res.json({ 
-            ok: true, 
-            user: {
-                id: user.id,
-                heq_id: user.heq_id,
-                email: safeEmail,
-                name: user.name,
-                bio: user.bio,
-                avatar: user.avatar,
-                country: user.country,
-                residence: user.residence,
-                age: user.age,
-                gender: user.gender,
-                joined_at: parseInt(user.joined_at, 10),
-                show_email: user.show_email,
-                faith_rank: user.faith_rank,
-                flames: user.flames,
-                rank_tier: user.rank_tier,
-                // 🔥 إضافة الرفيق
-                companion: companionData 
-            }, 
-            profileCompleted 
-        });
-
-    } catch (err) {
-        console.error("خطأ أثناء جلب بيانات المستخدم:", err);
-        res.status(500).json({ error: "فشل داخلي في الخادم." });
-    }
+  } catch (err) {
+    console.error("❌ خطأ أثناء جلب بيانات المستخدم (/api/me):", err);
+    res.status(500).json({ error: "فشل في جلب بيانات المستخدم." });
+  }
 });
 
 // ====== جلب جميع المنشورات (عام) ======
@@ -1733,75 +1718,66 @@ app.post("/api/notifications", auth, async (req, res) => {
 });
 
 // =======================================
-// ====== جلب بيانات ملف شخصي للمستخدمين الآخرين (مع بيانات الرفيق) ======
+// ====== جلب بيانات أي مستخدم عامة (مع بيانات الرفيق) ======
 // =======================================
-app.get("/api/users/:id", async (req, res) => {
-    const targetId = parseInt(req.params.id);
-    if (isNaN(targetId) || targetId <= 0) {
-        return res.status(400).json({ error: "معرّف المستخدم غير صحيح." });
+app.get("/api/users/:id", auth, async (req, res) => {
+  const targetId = parseInt(req.params.id);
+  if (isNaN(targetId)) {
+    return res.status(400).json({ error: "معرف مستخدم غير صالح." });
+  }
+
+  try {
+    const { rows } = await pool.query(
+      `SELECT
+          u.id, u.heq_id, u.email, u.name, u.bio, u.avatar, u.country, u.residence, u.age, u.gender, 
+          u.joined_at, u.display_count, u.flames, u.faith_rank, u.last_faith_activity, u.rank_tier, 
+          u.show_email,
+
+          -- بيانات الرفيق (استخدم COALESCE للتعامل مع NULL في حال عدم وجود سجل في Companion)
+          COALESCE(c.xp, 0) AS xp, 
+          COALESCE(c.level, 1) AS level, 
+          COALESCE(c.evolution_stage, 'egg') AS evolution_stage, 
+          COALESCE(c.current_companion, 'phoenix') AS current_companion, 
+          COALESCE(c.visits_count, 0) AS visits_count,
+          
+          -- حساب XP اللازمة للمستوى التالي (الحقل المحسوب)
+          (CASE 
+              WHEN COALESCE(c.level, 1) < 10 THEN (COALESCE(c.level, 1) * 100) 
+              WHEN COALESCE(c.level, 1) = 10 THEN 1000 
+              ELSE 1000 
+          END) AS xp_to_next_level 
+      FROM users u
+      LEFT JOIN companion c ON u.id = c.user_id
+      WHERE u.id = $1`,
+      [targetId]
+    );
+
+    if (!rows.length) {
+      return res.status(404).json({ error: "لم يتم العثور على المستخدم." });
     }
 
-    try {
-        // الاستعلام الجديد مع LEFT JOIN لربط المستخدم بجدول الرفيق (companion)
-        const { rows } = await pool.query(
-            `SELECT 
-                u.id, u.heq_id, u.email, u.name, u.bio, u.avatar, u.country, u.residence, u.age, u.gender, u.joined_at, u.show_email, u.faith_rank, u.flames, u.rank_tier, 
-                c.xp, c.level, c.evolution_stage, c.visits_count, c.current_companion, c.xp_to_next_level 
-            FROM 
-                users u
-            LEFT JOIN 
-                companion c ON u.id = c.user_id
-            WHERE 
-                u.id = $1`,
-            [targetId]
-        );
+    const user = rows[0];
 
-        if (!rows.length) return res.status(404).json({ error: "المستخدم غير موجود." });
+    // إضافة حقل محسوب للـ XP المتبقي
+    user.xp_required = user.xp_to_next_level - user.xp;
 
-        const user = rows[0];
-        
-        // 🧠 تجميع بيانات الرفيق (Companion) في كائن واحد
-        const companionData = {
-            xp: user.xp || 0,
-            level: user.level || 1,
-            evolution_stage: user.evolution_stage || 1, 
-            // ⚠️ ملاحظة هامة: عدد الزيارات يكون 0 للزوار، فقط المالك يراه حقيقياً
-            visits_count: 0, 
-            current_companion: user.current_companion || "phoenix",
-            xp_to_next_level: user.xp_to_next_level || 100, 
-        };
-
-        // إخفاء البريد إذا لم يختر المستخدم إظهاره
-        const safeEmail = user.show_email ? user.email : "مخفي";
-        
-        return res.json({ 
-            ok: true, 
-            user: {
-                id: user.id,
-                heq_id: user.heq_id,
-                email: safeEmail,
-                name: user.name,
-                bio: user.bio,
-                avatar: user.avatar,
-                country: user.country,
-                residence: user.residence,
-                age: user.age,
-                gender: user.gender,
-                joined_at: parseInt(user.joined_at, 10),
-                show_email: user.show_email,
-                faith_rank: user.faith_rank,
-                flames: user.flames,
-                rank_tier: user.rank_tier,
-                // 🔥 إضافة الرفيق (مع visits_count = 0 للزوار)
-                companion: companionData 
-            }
-        });
-
-    } catch (err) {
-        console.error("خطأ أثناء جلب بيانات الملف الشخصي:", err);
-        res.status(500).json({ error: "فشل داخلي في الخادم." });
+    // إزالة الإيميل إذا لم يطلب المستخدم إظهاره
+    if (user.show_email !== 1) {
+      delete user.email;
     }
+    
+    // إزالة الحقول الداخلية
+    delete user.show_email; 
+    delete user.xp_to_next_level; // هذا الحقل يجب ألا يظهر في الرد النهائي للملفات العامة
+    
+    res.json(user);
+
+  } catch (err) {
+    console.error("❌ خطأ أثناء جلب بيانات المستخدم (/api/users/:id):", err);
+    res.status(500).json({ error: "فشل في جلب بيانات المستخدم." });
+  }
 });
+
 
 // =========================================
 // 🔍 البحث عن المستخدمين بالاسم أو HEQ-ID
@@ -2506,6 +2482,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
