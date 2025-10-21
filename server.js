@@ -2519,6 +2519,43 @@ app.post("/api/profile/visit/:targetId", auth, async (req, res) => {
         res.status(500).json({ error: "فشل في تسجيل الزيارة." });
     }
 });
+// =======================================
+// ====== جلب قائمة زوار الملف الشخصي ======
+// =======================================
+app.get("/api/profile/visitors", auth, async (req, res) => {
+    const userId = req.user.id; // ID المستخدم الحالي (صاحب الحساب)
+
+    try {
+        const { rows } = await pool.query(
+            `SELECT
+                pvl.visitor_id,
+                pvl.last_visit_at,
+                u.name AS visitor_name,
+                u.avatar AS visitor_avatar
+             FROM profile_visits_log pvl
+             JOIN users u ON u.id = pvl.visitor_id
+             WHERE pvl.visited_id = $1  -- جلب زوار هذا المستخدم
+               AND pvl.visitor_id != $1 -- استثناء زيارات المستخدم لنفسه
+             ORDER BY pvl.last_visit_at DESC -- الأحدث أولاً
+             LIMIT 20`, // حد أقصى لعدد الزوار
+            [userId]
+        );
+
+        // تحويل timestamp إلى رقم (إذا كان BigInt) وتنسيق بسيط
+        const visitors = rows.map(v => ({
+            id: v.visitor_id,
+            name: v.visitor_name || "مستخدم غير معروف",
+            avatar: v.visitor_avatar || "assets/default-avatar.png",
+            lastVisitAt: parseInt(v.last_visit_at, 10) // تأكد أنه رقم
+        }));
+
+        res.json({ ok: true, visitors: visitors });
+
+    } catch (err) {
+        console.error("❌ خطأ أثناء جلب زوار الملف الشخصي (/api/profile/visitors):", err);
+        res.status(500).json({ ok: false, error: "فشل في جلب قائمة الزوار." });
+    }
+});
 
 //  Health check  تشغيل السيرفر
 
@@ -2529,6 +2566,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
