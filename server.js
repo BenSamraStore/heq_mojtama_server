@@ -1220,6 +1220,80 @@ app.get("/api/videos", async (_req, res) => {
     res.status(500).json({ ok: false, error: "فشل في جلب الفيديوهات" });
   }
 });
+// --- 3. Delete a Video ---
+app.delete("/api/videos/:id", auth, async (req, res) => {
+  try {
+    const videoId = parseInt(req.params.id);
+    const userId = req.user.id; // ID of the user requesting deletion
+
+    if (isNaN(videoId)) {
+      return res.status(400).json({ error: "معرف الفيديو غير صالح" });
+    }
+
+    // Get the video owner's ID and Cloudinary public ID
+    const videoRes = await pool.query(
+      "SELECT user_id, cloudinary_url FROM videos WHERE id = $1",
+      [videoId]
+    );
+
+    if (!videoRes.rows.length) {
+      return res.status(404).json({ error: "الفيديو غير موجود" });
+    }
+
+    const videoOwnerId = videoRes.rows[0].user_id;
+    const cloudinaryUrl = videoRes.rows[0].cloudinary_url;
+
+    // Check if the user is the owner OR an admin
+    let isAdmin = false;
+    if (userId !== videoOwnerId) {
+      const adminRes = await pool.query("SELECT is_admin FROM users WHERE id = $1", [userId]);
+      isAdmin = adminRes.rows.length > 0 && adminRes.rows[0].is_admin === 1;
+    }
+
+    if (userId !== videoOwnerId && !isAdmin) {
+      return res.status(403).json({ error: "🚫 غير مصرح لك بحذف هذا الفيديو" });
+    }
+
+    // --- Deletion Process ---
+    // 1. Delete from PostgreSQL database (will cascade delete comments)
+    const deleteRes = await pool.query("DELETE FROM videos WHERE id = $1", [videoId]);
+
+    if (deleteRes.rowCount === 0) {
+      // Should not happen if we found it earlier, but good to check
+      return res.status(404).json({ error: "فشل حذف الفيديو من قاعدة البيانات (ربما حُذف تواً)" });
+    }
+
+    console.log(`🗑️ Video ${videoId} deleted from database by user ${userId}.`);
+
+    // 2. Delete from Cloudinary (Optional but recommended)
+    if (cloudinaryUrl) {
+      try {
+        // Extract public_id from URL (Needs careful implementation based on your URL structure)
+        // Example: if URL is https://res.cloudinary.com/.../upload/v123/folder/publicid.mp4
+        // The public_id would be 'folder/publicid'
+        const urlParts = cloudinaryUrl.split('/');
+        const publicIdWithFormat = urlParts.slice(urlParts.indexOf('upload') + 2).join('/');
+        const publicId = publicIdWithFormat.substring(0, publicIdWithFormat.lastIndexOf('.'));
+
+        if (publicId) {
+          console.log(`☁️ Attempting to delete video ${publicId} from Cloudinary...`);
+          // We need to specify resource_type as 'video' for deletion
+          await cloudinary.uploader.destroy(publicId, { resource_type: 'video' });
+          console.log(`✅ Video ${publicId} deleted from Cloudinary.`);
+        }
+      } catch (cloudinaryError) {
+        console.error(`⚠️ Cloudinary Deletion Error for video ${videoId}:`, cloudinaryError.message);
+        // Don't fail the whole request if Cloudinary deletion fails, just log it.
+      }
+    }
+
+    res.json({ ok: true, message: "🗑️ تم حذف الفيديو بنجاح" });
+
+  } catch (err) {
+    console.error("❌ خطأ أثناء حذف الفيديو (API):", err);
+    res.status(500).json({ error: "فشل داخلي أثناء حذف الفيديو" });
+  }
+});
 // ====== إنشاء تعليق جديد ======  
 app.post("/api/comments", auth, async (req, res) => {  
   try {  
@@ -2739,6 +2813,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
