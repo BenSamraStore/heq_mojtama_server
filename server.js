@@ -1077,6 +1077,149 @@ app.post("/api/posts", auth, upload.single("image"), async (req, res) => {
     res.status(500).json({ error: "فشل إنشاء المنشور" });
   }
 });
+
+// --- 1. Upload a New Video ---
+app.post("/api/videos", auth, upload.single("video"), async (req, res) => {
+  try {
+    const { description } = req.body;
+    const userId = req.user.id;
+
+    // Check if user is banned or disabled (similar to creating posts)
+    const userRes = await pool.query("SELECT disabled, lock_until FROM users WHERE id = $1", [userId]);
+    const user = userRes.rows[0];
+    if (!user) return res.status(404).json({ error: "المستخدم غير موجود" });
+    if (user.disabled) return res.status(403).json({ error: "🚫 حسابك معطّل. لا يمكنك رفع فيديوهات." });
+    if (user.lock_until && user.lock_until > Date.now()) {
+      const diffH = Math.ceil((user.lock_until - Date.now()) / (1000 * 60 * 60));
+      return res.status(403).json({ error: `⏳ حسابك محظور مؤقتًا (${diffH} ساعة متبقية).` });
+    }
+
+    // Check if a video file was uploaded
+    if (!req.file) {
+      return res.status(400).json({ error: "⚠️ لم يتم رفع أي ملف فيديو" });
+    }
+
+    // Check video duration limit (optional but good) - requires ffprobe
+    // For simplicity, we'll skip duration check for now, but Cloudinary can enforce limits.
+
+    let videoUrl = null;
+    let thumbnailUrl = null;
+    let duration = null;
+
+    // Upload to Cloudinary
+    try {
+      console.log(`☁️ Uploading video for user ${userId} to Cloudinary...`);
+      const result = await cloudinary.uploader.upload(req.file.path, {
+        resource_type: "video", // Specify resource type as video
+        folder: "heq_mojtama/videos", // Folder for videos
+        // Cloudinary transformations (optional: compression, format, size)
+        eager: [ // Create thumbnail eagerly
+          { width: 300, height: 400, crop: "limit", format: 'jpg' }
+        ],
+        eager_async: false, // Wait for thumbnail generation
+        // You can add duration/size limits here in Cloudinary settings too
+      });
+
+      videoUrl = result.secure_url;
+      duration = Math.round(result.duration); // Duration in seconds
+
+      // Get thumbnail URL from eager transformation
+      if (result.eager && result.eager[0]) {
+        thumbnailUrl = result.eager[0].secure_url;
+      }
+
+      console.log(`✅ Video uploaded successfully: ${videoUrl}`);
+      // Delete temporary file from Render server
+      fs.unlinkSync(req.file.path);
+
+    } catch (uploadError) {
+      console.error("❌ Cloudinary Upload Error:", uploadError);
+      // Try to delete temp file even if upload failed
+      if (req.file && fs.existsSync(req.file.path)) {
+          try { fs.unlinkSync(req.file.path); } catch (e) { console.error("Error deleting temp file:", e);}
+      }
+      return res.status(500).json({ error: "فشل في معالجة الفيديو في Cloudinary" });
+    }
+
+    // Insert video info into the database
+    const createdAt = Date.now();
+    const insertRes = await pool.query(
+      `INSERT INTO videos (user_id, cloudinary_url, thumbnail_url, description, duration, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+      [userId, videoUrl, thumbnailUrl, description || "", duration, createdAt]
+    );
+
+    res.status(201).json({
+      ok: true,
+      message: "✅ تم رفع الفيديو بنجاح!",
+      video: {
+        id: insertRes.rows[0].id,
+        url: videoUrl,
+        thumbnail: thumbnailUrl,
+        duration: duration,
+        description: description || "",
+        createdAt: createdAt
+      }
+    });
+
+  } catch (err) {
+    console.error("❌ فشل رفع الفيديو (API):", err);
+    // Try to delete temp file in case of DB error too
+    if (req.file && fs.existsSync(req.file.path)) {
+        try { fs.unlinkSync(req.file.path); } catch (e) { console.error("Error deleting temp file:", e);}
+    }
+    res.status(500).json({ error: "فشل داخلي أثناء رفع الفيديو" });
+  }
+});
+// --- 2. Get List of Videos ---
+app.get("/api/videos", async (_req, res) => {
+  try {
+    // Join videos with users table to get author info
+    const { rows } = await pool.query(`
+      SELECT
+        v.id,
+        v.user_id,
+        v.cloudinary_url,
+        v.thumbnail_url,
+        v.description,
+        v.duration,
+        v.agree,
+        v.disagree,
+        v.created_at,
+        u.name AS author_name,
+        u.avatar AS author_avatar,
+        u.faith_rank AS author_rank, -- Include rank info
+        u.rank_tier AS author_tier   -- Include rank tier
+      FROM videos v
+      LEFT JOIN users u ON u.id = v.user_id -- Join based on user_id
+      ORDER BY v.created_at DESC -- Show newest videos first
+      LIMIT 100 -- Limit the number of videos initially (can add pagination later)
+    `);
+
+    // Convert timestamps and ensure numbers are numbers
+    const videos = rows.map(video => ({
+      id: video.id,
+      user_id: video.user_id,
+      url: video.cloudinary_url,
+      thumbnail: video.thumbnail_url,
+      description: video.description,
+      duration: video.duration ? parseInt(video.duration, 10) : null,
+      agree: parseInt(video.agree, 10),
+      disagree: parseInt(video.disagree, 10),
+      created_at: parseInt(video.created_at, 10),
+      author_name: video.author_name || "مستخدم محذوف",
+      author_avatar: video.author_avatar || "https://res.cloudinary.com/dqmlhgegm/image/upload/v1760854549/WhatsApp_Image_2025-10-19_at_8.15.20_AM_njvijg.jpg", // Default deleted user avatar
+      author_rank: video.author_rank,
+      author_tier: video.author_tier,
+    }));
+
+    res.json({ ok: true, videos: videos });
+
+  } catch (err) {
+    console.error("❌ خطأ أثناء جلب قائمة الفيديوهات:", err);
+    res.status(500).json({ ok: false, error: "فشل في جلب الفيديوهات" });
+  }
+});
 // ====== إنشاء تعليق جديد ======  
 app.post("/api/comments", auth, async (req, res) => {  
   try {  
@@ -2596,6 +2739,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
