@@ -1294,6 +1294,142 @@ app.delete("/api/videos/:id", auth, async (req, res) => {
     res.status(500).json({ error: "فشل داخلي أثناء حذف الفيديو" });
   }
 });
+// --- 4. Add a Comment to a Video ---
+app.post("/api/videos/:id/comments", auth, async (req, res) => {
+  try {
+    const videoId = parseInt(req.params.id);
+    const { parent_id, text } = req.body; // parent_id for replies
+    const userId = req.user.id;
+
+    if (isNaN(videoId)) {
+      return res.status(400).json({ error: "معرف الفيديو غير صالح" });
+    }
+    if (!text || text.trim() === "") {
+      return res.status(400).json({ error: "نص التعليق لا يمكن أن يكون فارغاً" });
+    }
+
+    // Check user ban/disable status
+    const userRes = await pool.query("SELECT disabled, lock_until FROM users WHERE id = $1", [userId]);
+    const user = userRes.rows[0];
+    if (!user) return res.status(404).json({ error: "المستخدم غير موجود" });
+    if (user.disabled) return res.status(403).json({ error: "🚫 حسابك معطّل. لا يمكنك التعليق." });
+    if (user.lock_until && user.lock_until > Date.now()) {
+        const diffH = Math.ceil((user.lock_until - Date.now()) / (1000 * 60 * 60));
+        return res.status(403).json({ error: `⏳ حسابك محظور مؤقتًا (${diffH} ساعة متبقية).` });
+    }
+
+    // Check if video exists
+    const videoExists = await pool.query("SELECT id FROM videos WHERE id = $1", [videoId]);
+    if (!videoExists.rows.length) {
+        return res.status(404).json({ error: "الفيديو غير موجود" });
+    }
+
+    const createdAt = Date.now();
+    const insertRes = await pool.query(
+      `INSERT INTO video_comments (video_id, user_id, parent_id, text, created_at)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, created_at`, // Return created_at as well
+      [videoId, userId, parent_id || null, text.trim(), createdAt]
+    );
+
+    const newCommentId = insertRes.rows[0].id;
+    const newCommentCreatedAt = insertRes.rows[0].created_at;
+
+    // --- Send Notification (Similar to post comments) ---
+    // Get video owner ID
+    const videoOwnerRes = await pool.query(`SELECT user_id FROM videos WHERE id = $1`, [videoId]);
+    const videoOwnerId = videoOwnerRes.rows.length ? videoOwnerRes.rows[0].user_id : null;
+
+    if (!parent_id) {
+      // New comment on video
+      if (videoOwnerId && videoOwnerId !== userId) {
+        await notifyUser(
+          videoOwnerId,
+          "💬 تعليق جديد على الفيديو", // Title changed
+          "قام أحد المستخدمين بالتعليق على الفيديو الخاص بك.", // Body changed
+          "comment", // Same type? Or maybe 'video_comment'? Let's keep 'comment' for now.
+          { video_id: videoId, comment_id: newCommentId, sender_id: userId } // Meta changed
+        );
+      }
+    } else {
+      // Reply to a video comment
+      const parentOwnerRes = await pool.query(`SELECT user_id FROM video_comments WHERE id = $1`, [parent_id]);
+      const parentOwnerId = parentOwnerRes.rows.length ? parentOwnerRes.rows[0].user_id : null;
+      if (parentOwnerId && parentOwnerId !== userId) {
+        await notifyUser(
+          parentOwnerId,
+          "↩️ رد على تعليقك", // Same title
+          "قام أحد المستخدمين بالرد على تعليقك على الفيديو.", // Body slightly changed
+          "reply", // Same type
+          { video_id: videoId, parent_id, comment_id: newCommentId, sender_id: userId } // Meta changed
+        );
+      }
+    }
+
+    res.status(201).json({
+      ok: true,
+      id: newCommentId,
+      created_at: parseInt(newCommentCreatedAt, 10), // Send back timestamp
+      message: "💬 تم إضافة التعليق بنجاح"
+    });
+
+  } catch (err) {
+    console.error("❌ خطأ أثناء إضافة تعليق على الفيديو:", err);
+    res.status(500).json({ error: "فشل إنشاء التعليق" });
+  }
+});
+// --- 5. Get Comments for a Video ---
+app.get("/api/videos/:id/comments", async (req, res) => {
+  try {
+    const videoId = parseInt(req.params.id);
+
+    if (isNaN(videoId)) {
+      return res.status(400).json({ error: "معرف الفيديو غير صالح" });
+    }
+
+    // Check if video exists
+    const videoExists = await pool.query("SELECT id FROM videos WHERE id = $1", [videoId]);
+    if (!videoExists.rows.length) {
+        return res.status(404).json({ error: "الفيديو غير موجود" });
+    }
+
+    // Join video_comments with users table
+    const { rows } = await pool.query(`
+      SELECT
+        vc.*, -- Select all columns from video_comments
+        u.name AS author_name,
+        u.avatar AS author_avatar,
+        u.faith_rank AS author_rank, -- Include rank info
+        u.rank_tier AS author_tier   -- Include rank tier
+      FROM video_comments vc
+      LEFT JOIN users u ON u.id = vc.user_id
+      WHERE vc.video_id = $1
+      ORDER BY vc.created_at ASC -- Order comments chronologically
+    `, [videoId]);
+
+    // Convert timestamps and ensure numbers are numbers
+    const comments = rows.map(comment => ({
+      id: comment.id,
+      video_id: comment.video_id,
+      user_id: comment.user_id,
+      parent_id: comment.parent_id,
+      text: comment.text,
+      agree: parseInt(comment.agree, 10),
+      disagree: parseInt(comment.disagree, 10),
+      created_at: parseInt(comment.created_at, 10),
+      author_name: comment.author_name || "مستخدم محذوف",
+      author_avatar: comment.author_avatar || "https://res.cloudinary.com/dqmlhgegm/image/upload/v1760854549/WhatsApp_Image_2025-10-19_at_8.15.20_AM_njvijg.jpg",
+      author_rank: comment.author_rank,
+      author_tier: comment.author_tier,
+    }));
+
+    res.json({ ok: true, comments: comments });
+
+  } catch (err) {
+    console.error("❌ خطأ في جلب تعليقات الفيديو:", err);
+    res.status(500).json({ ok: false, error: "فشل في جلب التعليقات" });
+  }
+});
 // ====== إنشاء تعليق جديد ======  
 app.post("/api/comments", auth, async (req, res) => {  
   try {  
@@ -2813,6 +2949,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
