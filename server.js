@@ -1534,128 +1534,141 @@ app.get("/api/comments/:postId", async (req, res) => {
     res.status(500).json({ error: "فشل في جلب التعليقات" });
   }
 });
-// ====== نظام تفاعل متطور (تصويت مرة واحدة) ======
+// ====== نظام تفاعل متطور (يدعم المنشورات والفيديوهات وتعليقاتهما) ======
 app.post("/api/react", auth, async (req, res) => {
   try {
-    const { type, targetId, action } = req.body; // type = post | comment
+    // 👇 نقبل أنواع جديدة: video, video_comment
+    const { type, targetId, action } = req.body; // type = post | comment | video | video_comment
     const userId = req.user.id;
 
     if (!type || !targetId || !["agree", "disagree"].includes(action)) {
-      return res.status(400).json({ error: "طلب غير صالح" });
+      return res.status(400).json({ error: "طلب غير صالح (type, targetId, action required)" });
     }
 
-    // 🧠 فحص حالة الحساب قبل التفاعل
+    // Check user ban/disable status
     const userRes = await pool.query("SELECT disabled, lock_until FROM users WHERE id = $1", [userId]);
     const user = userRes.rows[0];
-    if (!user)
-      return res.status(404).json({ error: "المستخدم غير موجود" });
-
-    if (user.disabled)
-      return res.status(403).json({ error: "🚫 حسابك معطّل. لا يمكنك التفاعل." });
-
+    if (!user) return res.status(404).json({ error: "المستخدم غير موجود" });
+    if (user.disabled) return res.status(403).json({ error: "🚫 حسابك معطّل. لا يمكنك التفاعل." });
     if (user.lock_until && user.lock_until > Date.now()) {
-      const diffH = Math.ceil((user.lock_until - Date.now()) / (1000 * 60 * 60));
-      return res.status(403).json({ error: `⏳ حسابك محظور مؤقتًا (${diffH} ساعة متبقية).` });
+        const diffH = Math.ceil((user.lock_until - Date.now()) / (1000 * 60 * 60));
+        return res.status(403).json({ error: `⏳ حسابك محظور مؤقتًا (${diffH} ساعة متبقية).` });
     }
 
-    // 🟢 إذا الحساب سليم نكمل
-    const table = type === "post" ? "posts" : type === "comment" ? "comments" : null;
-    if (!table)
-      return res.status(400).json({ error: "نوع الهدف غير معروف" });
-
-    // التحقق إن كان المستخدم قد تفاعل مسبقًا
-    const reactRes = await pool.query(
-      "SELECT * FROM reactions WHERE user_id = $1 AND target_type = $2 AND target_id = $3",
-      [userId, type, targetId]
-    );
-
-    // 🔹 الحالة 1: المستخدم لم يصوت من قبل
-    if (reactRes.rows.length === 0) {
-      await pool.query(
-        "INSERT INTO reactions (user_id, target_type, target_id, action) VALUES ($1, $2, $3, $4)",
-        [userId, type, targetId, action]
-      );
-      await pool.query(
-        `UPDATE ${table} SET ${action} = ${action} + 1 WHERE id = $1`,
-        [targetId]
-      );
-      return await sendCounts();
+    // 👇 تحديد الجدول المستهدف بناءً على النوع
+    let targetTable = null;
+    switch (type) {
+      case "post":
+        targetTable = "posts";
+        break;
+      case "comment":
+        targetTable = "comments";
+        break;
+      case "video":
+        targetTable = "videos";
+        break;
+      case "video_comment":
+        targetTable = "video_comments";
+        break;
+      default:
+        return res.status(400).json({ error: "نوع الهدف غير معروف" });
     }
 
-    const row = reactRes.rows[0];
+    // --- نفس منطق التفاعل السابق (إضافة/إزالة/تبديل) ---
 
-    // 🔹 الحالة 2: ضغط نفس الزر مرة ثانية → حذف التصويت
-    if (row.action === action) {
-      await pool.query("DELETE FROM reactions WHERE id = $1", [row.id]);
-      await pool.query(
-        `UPDATE ${table} SET ${action} = CASE WHEN ${action} > 0 THEN ${action} - 1 ELSE 0 END WHERE id = $1`,
-        [targetId]
+    const client = await pool.connect(); // Use transaction for consistency
+    try {
+      await client.query('BEGIN');
+
+      // Check existing reaction
+      const reactRes = await client.query(
+        "SELECT id, action FROM reactions WHERE user_id = $1 AND target_type = $2 AND target_id = $3",
+        [userId, type, targetId]
       );
-      return await sendCounts();
-    }
 
-    // 🔹 الحالة 3: غيّر رأيه
-    await pool.query("UPDATE reactions SET action = $1 WHERE id = $2", [action, row.id]);
-    const opposite = action === "agree" ? "disagree" : "agree";
-    await pool.query(
-      `UPDATE ${table} 
-       SET ${action} = ${action} + 1, 
-           ${opposite} = CASE WHEN ${opposite} > 0 THEN ${opposite} - 1 ELSE 0 END 
-       WHERE id = $1`,
-      [targetId]
-    );
-    return await sendCounts();
+      const oppositeAction = action === "agree" ? "disagree" : "agree";
+      let operation = null; // null, 'insert', 'delete', 'update'
 
-    // دالة لجلب القيم الجديدة بعد أي تعديل
-    async function sendCounts() {
-      try {
-        const updatedRes = await pool.query(
-          `SELECT agree, disagree FROM ${table} WHERE id = $1`,
+      if (reactRes.rows.length === 0) {
+        // الحالة 1: المستخدم لم يصوت من قبل -> إضافة تفاعل جديد
+        await client.query(
+          "INSERT INTO reactions (user_id, target_type, target_id, action) VALUES ($1, $2, $3, $4)",
+          [userId, type, targetId, action]
+        );
+        await client.query(
+          `UPDATE ${targetTable} SET ${action} = ${action} + 1 WHERE id = $1`,
           [targetId]
         );
-        const updated = updatedRes.rows[0] || { agree: 0, disagree: 0 };
+        operation = 'insert';
 
-        const targetTable = type === "post" ? "posts" : "comments";
-        const ownerRes = await pool.query(`SELECT user_id FROM ${targetTable} WHERE id = $1`, [targetId]);
-        const ownerRow = ownerRes.rows[0];
-        const nameRes = await pool.query("SELECT name FROM users WHERE id = $1", [userId]);
-        const userRow = nameRes.rows[0];
-        const fromUser = userRow ? userRow.name : "مستخدم";
-        const targetUserId = ownerRow ? ownerRow.user_id : null;
-
-        res.json({
-          ok: true,
-          agree: updated.agree,
-          disagree: updated.disagree,
-          from_user: fromUser,
-          target_user_id: targetUserId
-        });
-
-        // 🔔 إرسال الإشعار فقط إذا كان "إعجاب"
-        if (action === "agree" && ownerRow && ownerRow.user_id !== userId) {
-          const notifTitle = type === "post"
-            ? "👍 تفاعل مع منشورك"
-            : "👍 تفاعل مع تعليقك";
-          const notifBody = type === "post"
-            ? "قام أحد المستخدمين بالإعجاب بمنشورك."
-            : "قام أحد المستخدمين بالإعجاب بتعليقك.";
-
-          await notifyUser(
-            ownerRow.user_id,
-            notifTitle,
-            notifBody,
-            "reaction",
-            { target_type: type, target_id: targetId, sender_id: userId }
+      } else {
+        const existingReaction = reactRes.rows[0];
+        if (existingReaction.action === action) {
+          // الحالة 2: ضغط نفس الزر مرة ثانية -> حذف التصويت
+          await client.query("DELETE FROM reactions WHERE id = $1", [existingReaction.id]);
+          await client.query(
+            `UPDATE ${targetTable} SET ${action} = GREATEST(${action} - 1, 0) WHERE id = $1`, // Use GREATEST to prevent negative counts
+            [targetId]
           );
+          operation = 'delete';
+        } else {
+          // الحالة 3: غيّر رأيه -> تحديث التفاعل وتحديث العدادات
+          await client.query("UPDATE reactions SET action = $1 WHERE id = $2", [action, existingReaction.id]);
+          await client.query(
+            `UPDATE ${targetTable}
+             SET ${action} = ${action} + 1,
+                 ${oppositeAction} = GREATEST(${oppositeAction} - 1, 0)
+             WHERE id = $1`,
+            [targetId]
+          );
+          operation = 'update';
         }
-      } catch (e) {
-        console.error("❌ sendCounts error:", e.message);
-        res.status(500).json({ error: "فشل جلب البيانات الجديدة" });
       }
+
+      // --- جلب القيم الجديدة وصاحب المحتوى للإشعار ---
+      const updatedCountsRes = await client.query(
+        `SELECT agree, disagree, user_id FROM ${targetTable} WHERE id = $1`,
+        [targetId]
+      );
+      const updatedCounts = updatedCountsRes.rows[0] || { agree: 0, disagree: 0, user_id: null };
+      const targetOwnerId = updatedCounts.user_id;
+
+      await client.query('COMMIT'); // Commit transaction
+
+      res.json({
+        ok: true,
+        agree: updatedCounts.agree,
+        disagree: updatedCounts.disagree,
+        // (يمكن إزالة from_user و target_user_id إذا لم تعد الواجهة تستخدمها مباشرة)
+      });
+
+      // --- إرسال الإشعار (إذا كان تفاعل إيجابي ولم يكن تفاعل مع النفس) ---
+      if (action === 'agree' && operation !== 'delete' && targetOwnerId && targetOwnerId !== userId) {
+          let notifTitle = "👍 تفاعل جديد";
+          let notifBody = "قام أحد المستخدمين بالتفاعل بالإيجاب.";
+          let meta = { target_type: type, target_id: targetId, sender_id: userId };
+
+          if (type === 'post') { notifTitle = "👍 تفاعل مع منشورك"; notifBody = "قام أحد المستخدمين بالإعجاب بمنشورك."; meta.post_id = targetId; }
+          else if (type === 'comment') { notifTitle = "👍 تفاعل مع تعليقك"; notifBody = "قام أحد المستخدمين بالإعجاب بتعليقك."; meta.comment_id = targetId; }
+          else if (type === 'video') { notifTitle = "👍 تفاعل مع الفيديو الخاص بك"; notifBody = "قام أحد المستخدمين بالإعجاب بالفيديو الخاص بك."; meta.video_id = targetId; }
+          else if (type === 'video_comment') { notifTitle = "👍 تفاعل مع تعليقك على الفيديو"; notifBody = "قام أحد المستخدمين بالإعجاب بتعليقك على الفيديو."; meta.video_comment_id = targetId; }
+
+          // تأكد من تمرير البيانات الصحيحة لـ notifyUser
+          await notifyUser(targetOwnerId, notifTitle, notifBody, "reaction", meta);
+      }
+
+    } catch (e) {
+      await client.query('ROLLBACK'); // Rollback on error
+      console.error("❌ خطأ Transaction في نظام التفاعل:", e);
+      res.status(500).json({ error: "حدث خطأ أثناء معالجة التفاعل" });
+    } finally {
+      client.release(); // Release client back to pool
     }
+
   } catch (err) {
-    console.error("❌ خطأ في نظام التفاعل:", err);
-    res.status(500).json({ error: "حدث خطأ أثناء المعالجة" });
+    // Handle errors outside transaction (like initial user check)
+    console.error("❌ خطأ عام في نظام التفاعل:", err);
+    res.status(500).json({ error: "حدث خطأ عام" });
   }
 });
 // ====== تعديل منشور ======
@@ -1730,27 +1743,40 @@ app.delete("/api/posts/:id", auth, async (req, res) => {
 
 
 
+// ====== الإبلاغ عن محتوى (منشور أو فيديو أو تعليق) ======
 app.post("/api/report", auth, async (req, res) => {
   try {
-    const { post_id, reason } = req.body;
+    // 👇 نقبل post_id أو video_id أو comment_id (يمكن إضافة المزيد لاحقاً)
+    const { post_id, video_id, comment_id, reason } = req.body;
     const userId = req.user.id;
 
-    if (!post_id || !reason)
-      return res.status(400).json({ error: "يجب إدخال سبب الإبلاغ ومعرف المنشور" });
+    // Must report something specific
+    if (!post_id && !video_id && !comment_id) {
+      return res.status(400).json({ error: "يجب تحديد المحتوى المُراد الإبلاغ عنه (post_id أو video_id أو comment_id)" });
+    }
+    if (!reason || reason.trim() === "") {
+      return res.status(400).json({ error: "يجب إدخال سبب للإبلاغ" });
+    }
 
     const createdAt = Date.now();
+    // 👇 تعديل الاستعلام ليشمل video_id و comment_id (اختياري)
     await pool.query(
-      "INSERT INTO reports (user_id, post_id, reason, created_at) VALUES ($1, $2, $3, $4)",
-      [userId, post_id, reason, createdAt]
+      `INSERT INTO reports (user_id, post_id, video_id, comment_id, reason, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [userId, post_id || null, video_id || null, comment_id || null, reason.trim(), createdAt]
     );
 
     res.json({ ok: true, message: "🚩 تم إرسال البلاغ بنجاح" });
+
   } catch (err) {
     console.error("❌ فشل إرسال البلاغ:", err);
-    res.status(500).json({ error: "فشل إرسال البلاغ" });
+    // Check for foreign key constraint violation if target doesn't exist
+    if (err.code === '23503') { // PostgreSQL foreign key violation error code
+        return res.status(404).json({ error: "المحتوى المُراد الإبلاغ عنه غير موجود." });
+    }
+    res.status(500).json({ error: "فشل إرسال البلاغ بسبب خطأ داخلي" });
   }
 });
-
 
 
 app.post("/api/saved", auth, async (req, res) => {
@@ -2949,6 +2975,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
