@@ -1743,62 +1743,45 @@ app.delete("/api/posts/:id", auth, async (req, res) => {
 
 
 
-// ====== الإبلاغ عن محتوى (منشور أو فيديو أو تعليق) ======
+// ====== الإبلاغ عن محتوى (منشور أو تعليق - تم تعطيل الفيديو مؤقتاً) ======
 app.post("/api/report", auth, async (req, res) => {
   try {
-    // 👇 نقبل post_id أو video_id أو comment_id (يمكن إضافة المزيد لاحقاً)
     const { post_id, video_id, comment_id, reason } = req.body;
     const userId = req.user.id;
 
-    // Must report something specific
-    if (!post_id && !video_id && !comment_id) {
-      return res.status(400).json({ error: "يجب تحديد المحتوى المُراد الإبلاغ عنه (post_id أو video_id أو comment_id)" });
+    // --- 👇 التعديل هنا 👇 ---
+    // Check if the report is ONLY for a video
+    if (video_id && !post_id && !comment_id) {
+      return res.status(501).json({ error: "🚧 ميزة الإبلاغ عن الفيديوهات قيد التطوير حالياً." }); // 501 Not Implemented
+    }
+    // --- نهاية التعديل ---
+
+    // Must report something specific (post or comment now)
+    if (!post_id && !comment_id) { // Removed video_id check here
+      return res.status(400).json({ error: "يجب تحديد المحتوى المُراد الإبلاغ عنه (post_id أو comment_id)" });
     }
     if (!reason || reason.trim() === "") {
       return res.status(400).json({ error: "يجب إدخال سبب للإبلاغ" });
     }
 
     const createdAt = Date.now();
-    // 👇 تعديل الاستعلام ليشمل video_id و comment_id (اختياري)
+    // 👇 تعديل الاستعلام ليتجاهل video_id (سيتم إرسال null دائماً)
     await pool.query(
       `INSERT INTO reports (user_id, post_id, video_id, comment_id, reason, created_at)
        VALUES ($1, $2, $3, $4, $5, $6)`,
-      [userId, post_id || null, video_id || null, comment_id || null, reason.trim(), createdAt]
+      // Note: We send null for video_id even if it was in the request body
+      [userId, post_id || null, null, comment_id || null, reason.trim(), createdAt]
     );
 
     res.json({ ok: true, message: "🚩 تم إرسال البلاغ بنجاح" });
 
   } catch (err) {
     console.error("❌ فشل إرسال البلاغ:", err);
-    // Check for foreign key constraint violation if target doesn't exist
-    if (err.code === '23503') { // PostgreSQL foreign key violation error code
+    // Keep the foreign key check just in case
+    if (err.code === '23503') {
         return res.status(404).json({ error: "المحتوى المُراد الإبلاغ عنه غير موجود." });
     }
     res.status(500).json({ error: "فشل إرسال البلاغ بسبب خطأ داخلي" });
-  }
-});
-
-
-app.post("/api/saved", auth, async (req, res) => {
-  try {
-    const { post_id } = req.body;
-    const userId = req.user.id;
-
-    if (!post_id)
-      return res.status(400).json({ error: "رقم المنشور مطلوب" });
-
-    const savedAt = Date.now();
-    await pool.query(
-      `INSERT INTO saved_posts (user_id, post_id, saved_at)
-       VALUES ($1, $2, $3)
-       ON CONFLICT (user_id, post_id) DO NOTHING`,
-      [userId, post_id, savedAt]
-    );
-
-    res.json({ ok: true, message: "💾 تم حفظ المنشور في المفضلة!" });
-  } catch (err) {
-    console.error("❌ خطأ أثناء حفظ المنشور:", err);
-    res.status(500).json({ error: "فشل حفظ المنشور" });
   }
 });
 // ====== فحص صلاحية المطور ======
@@ -2975,6 +2958,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
