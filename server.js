@@ -357,6 +357,36 @@ await runQuery(`
     UNIQUE(user_id, post_id)
   )
 `);
+    // videos
+await runQuery(`
+  CREATE TABLE IF NOT EXISTS videos (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    cloudinary_url TEXT NOT NULL,
+    thumbnail_url TEXT, 
+    description TEXT DEFAULT '',
+    duration INTEGER,
+    agree INTEGER DEFAULT 0,
+    disagree INTEGER DEFAULT 0,
+    created_at BIGINT NOT NULL
+  )
+`);
+console.log("🎬 جدول videos جاهز");
+    // video_comments
+await runQuery(`
+  CREATE TABLE IF NOT EXISTS video_comments (
+    id SERIAL PRIMARY KEY,
+    video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE, 
+    user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    parent_id INTEGER REFERENCES video_comments(id) ON DELETE CASCADE,
+    text TEXT NOT NULL,
+    agree INTEGER DEFAULT 0,
+    disagree INTEGER DEFAULT 0,
+    created_at BIGINT NOT NULL
+  )
+`);
+console.log("💬 جدول video_comments جاهز");
+    
    
     await runQuery(`CREATE INDEX IF NOT EXISTS idx_posts_created ON posts(created_at)`);
     await runQuery(`CREATE INDEX IF NOT EXISTS idx_comments_post ON comments(post_id)`);
@@ -2566,6 +2596,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
