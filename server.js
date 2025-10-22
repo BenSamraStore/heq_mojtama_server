@@ -16,7 +16,7 @@ cloudinary.config({
   secure: true, 
 });
 
-// ✅ متغيرات البيئة
+
 const PORT = process.env.PORT;
 const SECRET_KEY = process.env.SECRET_KEY;
 const REFRESH_SECRET = process.env.REFRESH_SECRET;
@@ -2596,6 +2596,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
