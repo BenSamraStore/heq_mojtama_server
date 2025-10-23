@@ -1171,32 +1171,28 @@ app.post("/api/videos", auth, upload.single("video"), async (req, res) => {
     res.status(500).json({ error: "فشل داخلي أثناء رفع الفيديو" });
   }
 });
-// --- 2. Get List of Videos ---
-app.get("/api/videos", async (_req, res) => {
+// --- 2. Get List of Videos (With PAGINATION) ---
+app.get("/api/videos", async (req, res) => {
   try {
-    // Join videos with users table to get author info
+    // ✨ 1. جلب متغيرات الصفحة (Page) والحد (Limit)
+    const limit = parseInt(req.query.limit) || 10; // الافتراضي 10 فيديوهات
+    const page = parseInt(req.query.page) || 1;   // الافتراضي صفحة 1
+    const offset = (page - 1) * limit; // حساب عدد الفيديوهات التي يجب تخطيها
+
+    // ✨ 2. تعديل الاستعلام (Query) ليستخدم LIMIT و OFFSET
     const { rows } = await pool.query(`
       SELECT
-        v.id,
-        v.user_id,
-        v.cloudinary_url,
-        v.thumbnail_url,
-        v.description,
-        v.duration,
-        v.agree,
-        v.disagree,
-        v.created_at,
-        u.name AS author_name,
-        u.avatar AS author_avatar,
-        u.faith_rank AS author_rank, -- Include rank info
-        u.rank_tier AS author_tier   -- Include rank tier
+        v.id, v.user_id, v.cloudinary_url, v.thumbnail_url, v.description, v.duration,
+        v.agree, v.disagree, v.created_at,
+        u.name AS author_name, u.avatar AS author_avatar,
+        u.faith_rank AS author_rank, u.rank_tier AS author_tier
       FROM videos v
-      LEFT JOIN users u ON u.id = v.user_id -- Join based on user_id
-      ORDER BY v.created_at DESC -- Show newest videos first
-      LIMIT 100 -- Limit the number of videos initially (can add pagination later)
-    `);
+      LEFT JOIN users u ON u.id = v.user_id
+      ORDER BY v.created_at DESC
+      LIMIT $1 OFFSET $2 -- ✨ استخدام المتغيرات هنا
+    `, [limit, offset]); // ✨ تمرير المتغيرات هنا
 
-    // Convert timestamps and ensure numbers are numbers
+    // (باقي الكود يبقى كما هو)
     const videos = rows.map(video => ({
       id: video.id,
       user_id: video.user_id,
@@ -1208,7 +1204,7 @@ app.get("/api/videos", async (_req, res) => {
       disagree: parseInt(video.disagree, 10),
       created_at: parseInt(video.created_at, 10),
       author_name: video.author_name || "مستخدم محذوف",
-      author_avatar: video.author_avatar || "https://res.cloudinary.com/dqmlhgegm/image/upload/v1760854549/WhatsApp_Image_2025-10-19_at_8.15.20_AM_njvijg.jpg", // Default deleted user avatar
+      author_avatar: video.author_avatar || "https://res.cloudinary.com/dqmlhgegm/image/upload/v1760854549/WhatsApp_Image_2025-10-19_at_8.15.20_AM_njvijg.jpg",
       author_rank: video.author_rank,
       author_tier: video.author_tier,
     }));
@@ -1944,6 +1940,71 @@ app.post("/api/admin/reports/:id/resolve", auth, requireAdmin, async (req, res) 
     res.json({ ok: true, message: "تم إنهاء البلاغ وإشعار المبلّغ" });
   } catch (err) {
     res.status(500).json({ error: "فشل تحديث البلاغ" });
+  }
+});
+// =======================================
+// ====== إدارة الفيديوهات (للمطور) ======
+// =======================================
+
+// 1. جلب قائمة الفيديوهات (نسخة مبسطة)
+app.get("/api/admin/videos", auth, requireAdmin, async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT 
+        v.id, 
+        u.name AS author_name, 
+        v.cloudinary_url, 
+        v.description, 
+        v.created_at
+      FROM videos v
+      LEFT JOIN users u ON u.id = v.user_id
+      ORDER BY v.created_at DESC
+    `);
+    res.json({ ok: true, videos: rows });
+  } catch (err) {
+    res.status(500).json({ error: "فشل جلب الفيديوهات" });
+  }
+});
+
+// 2. حذف فيديو (مع إرسال سبب)
+app.post("/api/admin/videos/:id/delete", auth, requireAdmin, async (req, res) => {
+  try {
+    const vid = +req.params.id;
+    const reason = (req.body.reason || "مخالفة القواعد").trim();
+
+    // جلب بيانات الفيديو (لإشعار المالك وحذف الكلاود)
+    const { rows } = await pool.query("SELECT user_id, cloudinary_url FROM videos WHERE id = $1", [vid]);
+    if (!rows.length)
+      return res.status(404).json({ error: "الفيديو غير موجود" });
+
+    const owner = rows[0].user_id;
+    const cloudinaryUrl = rows[0].cloudinary_url;
+
+    // 1. حذف من قاعدة البيانات (سيؤدي لحذف التعليقات المرتبطة)
+    await pool.query("DELETE FROM videos WHERE id = $1", [vid]);
+
+    // 2. إشعار صاحب الفيديو
+    await notifyUser(owner, "تم حذف الفيديو الخاص بك", `السبب: ${reason}`, "moderation", { video_id: vid });
+
+    // 3. (مهم) حذف من Cloudinary
+    if (cloudinaryUrl) {
+      try {
+        const urlParts = cloudinaryUrl.split('/');
+        const publicIdWithFormat = urlParts.slice(urlParts.indexOf('upload') + 2).join('/');
+        const publicId = publicIdWithFormat.substring(0, publicIdWithFormat.lastIndexOf('.'));
+
+        if (publicId) {
+          await cloudinary.uploader.destroy(publicId, { resource_type: 'video' });
+          console.log(`✅ Admin deleted video ${publicId} from Cloudinary.`);
+        }
+      } catch (cloudinaryError) {
+        console.error(`⚠️ Admin Cloudinary Deletion Error for video ${vid}:`, cloudinaryError.message);
+      }
+    }
+
+    res.json({ ok: true, message: "تم حذف الفيديو وإشعار صاحبه" });
+  } catch (err) {
+    res.status(500).json({ error: "فشل حذف الفيديو" });
   }
 });
 // ====== إرسال إشعار عام أو موجه ======
@@ -2936,6 +2997,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
