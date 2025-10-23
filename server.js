@@ -31,7 +31,7 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-// helper صغير (اختياري)
+
 function runQuery(q, params = []) {
   return pool.query(q, params);
 }
@@ -2997,6 +2997,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
