@@ -136,10 +136,10 @@ async function notifyUser(toUserId, title, body, type = "system", meta = {}) {
         finalBody = `قام ${senderName} برفض طلب الوصل.`;
         break;
       
-      // يمكنك إضافة أنواع أخرى هنا مستقبلاً
+      
     }
 
-    // الخطوة 3: إدراج الإشعار المخصص في قاعدة البيانات
+   
     await runQuery(
       `INSERT INTO notifications (to_user_id, title, body, type, meta, is_read, created_at)
        VALUES ($1, $2, $3, $4, $5, 0, $6)`,
@@ -158,9 +158,7 @@ app.get("/api/test", (_req, res) => {
   res.json({ ok: true, message: "✅ API + DB (PG) ready", time: new Date().toISOString() });
 });
 
-// ─────────────────────────────────────────
-// إنشاء الجداول (نفس الأسماء/الأعمدة القديمة)
-// ─────────────────────────────────────────
+
 (async () => {
   try {
     await runQuery("SELECT NOW()");
@@ -271,7 +269,7 @@ console.log("📩 جداول pending_users و otp_codes جاهزة");
     await runQuery(`
       CREATE TABLE IF NOT EXISTS notifications (
         id SERIAL PRIMARY KEY,
-        to_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        to_user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
         title TEXT NOT NULL,
         body TEXT NOT NULL,
         type TEXT DEFAULT 'system',
@@ -2997,6 +2995,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
