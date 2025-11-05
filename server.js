@@ -1069,30 +1069,29 @@ app.post("/api/videos", auth, upload.single("video"), async (req, res) => {
       return res.status(403).json({ error: `⏳ حسابك محظور مؤقتًا (${diffH} ساعة متبقية).` });
     }
 
-    // Check if a video file was uploaded
+    
     if (!req.file) {
       return res.status(400).json({ error: "⚠️ لم يتم رفع أي ملف فيديو" });
     }
 
-    // Check video duration limit (optional but good) - requires ffprobe
-    // For simplicity, we'll skip duration check for now, but Cloudinary can enforce limits.
+    
 
     let videoUrl = null;
     let thumbnailUrl = null;
     let duration = null;
 
-    // Upload to Cloudinary
+   
     try {
       console.log(`☁️ Uploading video for user ${userId} to Cloudinary...`);
       const result = await cloudinary.uploader.upload(req.file.path, {
-        resource_type: "video", // Specify resource type as video
-        folder: "heq_mojtama/videos", // Folder for videos
-        // Cloudinary transformations (optional: compression, format, size)
-        eager: [ // Create thumbnail eagerly
+        resource_type: "video", 
+        folder: "heq_mojtama/videos",
+        
+        eager: [
           { width: 300, height: 400, crop: "limit", format: 'jpg' }
         ],
-        eager_async: false, // Wait for thumbnail generation
-        // You can add duration/size limits here in Cloudinary settings too
+        eager_async: false, 
+        
       });
 
       videoUrl = result.secure_url;
@@ -1149,25 +1148,24 @@ app.post("/api/videos", auth, upload.single("video"), async (req, res) => {
 // --- 2. Get List of Videos (With PAGINATION) ---
 app.get("/api/videos", async (req, res) => {
   try {
-    // ✨ 1. جلب متغيرات الصفحة (Page) والحد (Limit)
-    const limit = parseInt(req.query.limit) || 10; // الافتراضي 10 فيديوهات
-    const page = parseInt(req.query.page) || 1;   // الافتراضي صفحة 1
-    const offset = (page - 1) * limit; // حساب عدد الفيديوهات التي يجب تخطيها
-
-    // ✨ 2. تعديل الاستعلام (Query) ليستخدم LIMIT و OFFSET
+    
+    const limit = parseInt(req.query.limit) || 10; 
+    const page = parseInt(req.query.page) || 1;  
+    const offset = (page - 1) * limit; 
     const { rows } = await pool.query(`
+ 
       SELECT
         v.id, v.user_id, v.cloudinary_url, v.thumbnail_url, v.description, v.duration,
         v.agree, v.disagree, v.created_at,
         u.name AS author_name, u.avatar AS author_avatar,
-        u.faith_rank AS author_rank, u.rank_tier AS author_tier
+        u.faith_rank AS author_rank, u.rank_tier AS author_tier,
+        (SELECT COUNT(*) FROM video_comments vc WHERE vc.video_id = v.id) AS comment_count
       FROM videos v
       LEFT JOIN users u ON u.id = v.user_id
       ORDER BY v.created_at DESC
-      LIMIT $1 OFFSET $2 -- ✨ استخدام المتغيرات هنا
-    `, [limit, offset]); // ✨ تمرير المتغيرات هنا
+      LIMIT $1 OFFSET $2 
+   `, [limit, offset]);
 
-    // (باقي الكود يبقى كما هو)
     const videos = rows.map(video => ({
       id: video.id,
       user_id: video.user_id,
@@ -1182,6 +1180,7 @@ app.get("/api/videos", async (req, res) => {
       author_avatar: video.author_avatar || "https://res.cloudinary.com/dqmlhgegm/image/upload/v1760854549/WhatsApp_Image_2025-10-19_at_8.15.20_AM_njvijg.jpg",
       author_rank: video.author_rank,
       author_tier: video.author_tier,
+      comment_count: parseInt(video.comment_count || 0, 10) 
     }));
 
     res.json({ ok: true, videos: videos });
@@ -3040,6 +3039,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
