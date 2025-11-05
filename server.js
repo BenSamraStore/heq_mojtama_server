@@ -1,4 +1,4 @@
-//hjjjjjjj
+
 const express = require("express");
 const cors = require("cors");
 const bcrypt = require("bcryptjs");
@@ -179,6 +179,8 @@ app.get("/api/test", (_req, res) => {
         lock_until BIGINT DEFAULT 0,
         failed_attempts INTEGER DEFAULT 0,
         is_admin INTEGER DEFAULT 0,
+        two_fa_enabled INTEGER DEFAULT 0,
+        two_fa_secret TEXT DEFAULT '',
         disabled INTEGER DEFAULT 0,
         show_email INTEGER DEFAULT 0,
         heq_id TEXT DEFAULT '',
@@ -3039,6 +3041,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
