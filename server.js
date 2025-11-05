@@ -8,6 +8,7 @@ const path = require("path");
 const multer = require("multer");
 const { Pool } = require("pg");
 const cloudinary = require("cloudinary").v2;
+const { authenticator } = require("otplib");
 const app = express();
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -619,13 +620,29 @@ app.post("/api/login", async (req, res) => {
     const token = signAccessToken(payload);
     const refreshToken = signRefreshToken(payload);
     const userAgent = req.headers['user-agent'] || 'Unknown Device';
-    await storeRefreshToken(user.id, refreshToken, userAgent);
-    res.json({
-      ok: true,
-      message: "✅ تم تسجيل الدخول بنجاح",
-      token,
-      refreshToken
-    });
+    if (user.two_fa_enabled === 1) {
+      
+     
+      return res.json({
+        ok: true,
+        two_fa_required: true, // الواجهة ستفهم هذه الرسالة
+        message: "يرجى إدخال رمز التحقق بخطوتين"
+      });
+
+    } else {
+
+      // 3. إذا لم تكن مفعلة، أكمل كالمعتاد
+      await storeRefreshToken(user.id, refreshToken, userAgent);
+
+      res.json({
+        ok: true,
+        two_fa_required: false, // لا نحتاج رمز
+        message: "✅ تم تسجيل الدخول بنجاح",
+        token,
+        refreshToken
+      });
+    }
+    
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "حدث خطأ أثناء تسجيل الدخول" });
@@ -2798,7 +2815,129 @@ app.post("/api/auth/devices", auth, async (req, res) => {
     res.status(500).json({ error: "فشل جلب الأجهزة المتصلة" });
   }
 });
+// =======================================
+// 🛡️ التحقق بخطوتين (2FA)
+// =======================================
 
+// 1. بدء إعداد التحقق (إنشاء المفتاح السري والـ QR Code)
+app.post("/api/2fa/setup", auth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const email = req.user.email;
+
+    // إنشاء مفتاح سري جديد وفريد
+    const secret = authenticator.generateSecret();
+    
+    // إنشاء رابط QR Code (لتطبيق Google Authenticator)
+    const appName = "HEQ_Mojtama";
+    const otpAuthUrl = authenticator.keyuri(email, appName, secret);
+
+    // تخزين المفتاح السري "مؤقتاً" في قاعدة البيانات (أو إرساله مباشرة)
+    // الأفضل هو تخزينه هنا
+    await runQuery("UPDATE users SET two_fa_secret = $1 WHERE id = $2", [
+      secret, // (لاحقاً سنقوم بتشفير هذا المفتاح قبل حفظه)
+      userId,
+    ]);
+
+    res.json({
+      ok: true,
+      secret: secret, // للاختبار (يمكن إزالته لاحقاً)
+      qrCodeUrl: otpAuthUrl, // الواجهة ستستخدم هذا لإنشاء الـ QR
+    });
+  } catch (err) {
+    console.error("❌ خطأ أثناء إعداد 2FA:", err);
+    res.status(500).json({ error: "فشل إنشاء رمز التحقق" });
+  }
+});
+
+// 2. تأكيد وتفعيل الميزة (التحقق من الـ 6 أرقام)
+app.post("/api/2fa/verify", auth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { token } = req.body; // الرمز السداسي (6 أرقام)
+
+    if (!token) {
+      return res.status(400).json({ error: "الرمز مطلوب" });
+    }
+
+    // جلب المفتاح السري من قاعدة البيانات
+    const { rows } = await runQuery(
+      "SELECT two_fa_secret FROM users WHERE id = $1",
+      [userId]
+    );
+    if (!rows.length || !rows[0].two_fa_secret) {
+      return res.status(400).json({ error: "لم يتم بدء إعداد التحقق" });
+    }
+    const secret = rows[0].two_fa_secret;
+
+    // التحقق من صحة الرمز
+    const isValid = authenticator.check(token, secret);
+
+    if (isValid) {
+      // الرمز صحيح -> تفعيل الميزة بشكل دائم
+      await runQuery("UPDATE users SET two_fa_enabled = 1 WHERE id = $1", [
+        userId,
+      ]);
+      res.json({ ok: true, message: "✅ تم تفعيل التحقق بخطوتين بنجاح!" });
+    } else {
+      // الرمز خاطئ
+      res.status(400).json({ error: "❌ الرمز غير صحيح، حاول مرة أخرى" });
+    }
+  } catch (err) {
+    console.error("❌ خطأ أثناء تفعيل 2FA:", err);
+    res.status(500).json({ error: "فشل تفعيل الميزة" });
+  }
+});
+
+// 3. نقطة النهاية لإكمال تسجيل الدخول (عندما تكون 2FA مفعلة)
+app.post("/api/2fa/login", async (req, res) => {
+  try {
+    const { email, password, token } = req.body; // الرمز السداسي + الإيميل والباسورد
+
+    if (!email || !password || !token) {
+      return res.status(400).json({ error: "البيانات ناقصة" });
+    }
+
+    // 1. التحقق من الإيميل والباسورد (مرة أخرى للأمان)
+    const userRes = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
+    if (!userRes.rows.length) {
+      return res.status(400).json({ error: "الحساب غير موجود" });
+    }
+    const user = userRes.rows[0];
+
+    const match = await bcrypt.compare(password, user.password);
+    if (!match) {
+      return res.status(400).json({ error: "كلمة المرور غير صحيحة" });
+    }
+
+    // 2. التحقق من الرمز السداسي (2FA)
+    const secret = user.two_fa_secret;
+    const isValid = authenticator.check(token, secret);
+
+    if (!isValid) {
+      return res.status(400).json({ error: "❌ الرمز غير صحيح" });
+    }
+
+    // 3. كل شيء صحيح -> إصدار التوكنات (نفس كود /api/login)
+    const payload = { id: user.id, email: user.email };
+    const accessToken = signAccessToken(payload);
+    const refreshToken = signRefreshToken(payload);
+    
+    const userAgent = req.headers['user-agent'] || 'Unknown Device';
+    await storeRefreshToken(user.id, refreshToken, userAgent);
+
+    res.json({
+      ok: true,
+      message: "✅ تم تسجيل الدخول بنجاح",
+      token: accessToken,
+      refreshToken: refreshToken,
+    });
+
+  } catch (err) {
+    console.error("❌ خطأ أثناء تسجيل الدخول بـ 2FA:", err);
+    res.status(500).json({ error: "فشل عملية الدخول" });
+  }
+});
 app.post("/api/auth/revoke-device", auth, async (req, res) => {
   try {
     const userId = req.user.id;
@@ -3041,6 +3180,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
