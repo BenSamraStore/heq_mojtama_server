@@ -2765,13 +2765,15 @@ async function sendEmailBrevo(to, subject, html) {
     console.error("🚫 خطأ في الاتصال بـ Brevo:", err);
   }
 }
-
-app.get("/api/auth/devices", auth, async (req, res) => {
+app.post("/api/auth/devices", auth, async (req, res) => {
   try {
     const userId = req.user.id;
-    const currentToken = (req.headers.authorization || "").slice(7);
+    const { current_refresh_token } = req.body; 
 
-    // جلب كل توكنات التحديث لهذا المستخدم
+    if (!current_refresh_token) {
+      return res.status(400).json({ error: "التوكن الحالي مطلوب" });
+    }
+
     const { rows } = await runQuery(
       `SELECT id, device_info, created_at, token 
        FROM refresh_tokens 
@@ -2779,13 +2781,15 @@ app.get("/api/auth/devices", auth, async (req, res) => {
        ORDER BY created_at DESC`,
       [userId]
     );
+
     const devices = rows.map(device => ({
       id: device.id,
-      device_info: device.device_info, 
+      device_info: device.device_info,
       created_at: device.created_at,
-      
+      is_current: (device.token === current_refresh_token) 
     }));
-
+    
+   
     res.json({ ok: true, devices: devices });
 
   } catch (err) {
@@ -3036,6 +3040,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
