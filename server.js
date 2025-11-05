@@ -46,9 +46,7 @@ app.use(cors());
 app.use(express.json({ limit: "5mb" }));
 app.use("/uploads", express.static(UPLOADS_DIR));
 
-// ─────────────────────────────────────────
-// Auth + Helpers
-// ─────────────────────────────────────────
+
 function auth(req, res, next) {
   const h = req.headers.authorization || "";
   const token = h.startsWith("Bearer ") ? h.slice(7) : null;
@@ -3180,6 +3178,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
