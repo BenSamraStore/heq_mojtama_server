@@ -160,15 +160,7 @@ app.get("/api/test", (_req, res) => {
   try {
     await runQuery("SELECT NOW()");
     console.log("🟢 تم الاتصال بـ PostgreSQL");
-    console.log("🟢 تم الاتصال بـ PostgreSQL");
-
-    // ✨✨✨ كود مؤقت لحذف الجدول القديم (مرة واحدة فقط) ✨✨✨
-    try {
-      await runQuery(`DROP TABLE IF EXISTS refresh_tokens CASCADE`);
-      console.log("🧹 [مؤقت] تم حذف جدول refresh_tokens القديم بنجاح.");
-    } catch (dropErr) {
-      console.error("⚠️ [مؤقت] فشل حذف الجدول القديم (قد لا يكون موجوداً أصلاً):", dropErr.message);
-    }
+    
     
     await runQuery(`
       CREATE TABLE IF NOT EXISTS users (
@@ -3048,6 +3040,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
