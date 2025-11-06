@@ -2814,9 +2814,7 @@ app.post("/api/auth/devices", auth, async (req, res) => {
     res.status(500).json({ error: "فشل جلب الأجهزة المتصلة" });
   }
 });
-// =======================================
-// 🛡️ التحقق بخطوتين (2FA)
-// =======================================
+
 
 // 1. بدء إعداد التحقق (إنشاء المفتاح السري والـ QR Code)
 app.post("/api/2fa/setup", auth, async (req, res) => {
@@ -2849,7 +2847,7 @@ app.post("/api/2fa/setup", auth, async (req, res) => {
   }
 });
 
-// 2. تأكيد وتفعيل الميزة (التحقق من الـ 6 أرقام)
+
 app.post("/api/2fa/verify", auth, async (req, res) => {
   try {
     const userId = req.user.id;
@@ -2935,6 +2933,43 @@ app.post("/api/2fa/login", async (req, res) => {
   } catch (err) {
     console.error("❌ خطأ أثناء تسجيل الدخول بـ 2FA:", err);
     res.status(500).json({ error: "فشل عملية الدخول" });
+  }
+});
+// 4. إلغاء تفعيل الميزة
+app.post("/api/2fa/disable", auth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { password } = req.body;
+
+    if (!password) {
+      return res.status(400).json({ error: "كلمة المرور مطلوبة" });
+    }
+
+    // 1. التحقق من كلمة المرور
+    const { rows } = await pool.query(
+      "SELECT password FROM users WHERE id = $1",
+      [userId]
+    );
+    if (!rows.length) {
+      return res.status(404).json({ error: "المستخدم غير موجود" });
+    }
+    
+    const match = await bcrypt.compare(password, rows[0].password);
+    if (!match) {
+      return res.status(400).json({ error: "❌ كلمة المرور غير صحيحة" });
+    }
+
+    // 2. كلمة المرور صحيحة -> إلغاء التفعيل
+    await runQuery(
+      "UPDATE users SET two_fa_enabled = 0, two_fa_secret = '' WHERE id = $1",
+      [userId]
+    );
+
+    res.json({ ok: true, message: "✅ تم إلغاء تفعيل الميزة بنجاح" });
+
+  } catch (err) {
+    console.error("❌ خطأ أثناء إلغاء تفعيل 2FA:", err);
+    res.status(500).json({ error: "فشل إلغاء التفعيل" });
   }
 });
 app.post("/api/auth/revoke-device", auth, async (req, res) => {
@@ -3179,6 +3214,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
