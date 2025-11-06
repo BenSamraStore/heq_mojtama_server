@@ -904,7 +904,7 @@ app.get("/api/me", auth, async (req, res) => {
       `SELECT
           u.id, u.heq_id, u.email, u.name, u.bio, u.avatar, u.country, u.residence, u.age, u.gender, 
           u.joined_at, u.display_count, u.flames, u.faith_rank, u.last_faith_activity, u.rank_tier, 
-          u.show_email,
+          u.show_email, u.two_fa_enabled,
 
           -- بيانات الرفيق (القيم الافتراضية)
           COALESCE(c.xp, 0) AS xp, 
@@ -955,7 +955,7 @@ app.get("/api/me", auth, async (req, res) => {
       user: {
         id: user.id,
         heq_id: user.heq_id,
-        email: user.email, // إرجاع البريد الحقيقي (هذا ملفه الشخصي)
+        email: user.email, 
         name: user.name,
         bio: user.bio,
         avatar: user.avatar,
@@ -968,7 +968,8 @@ app.get("/api/me", auth, async (req, res) => {
         faith_rank: user.faith_rank,
         flames: user.flames,
         rank_tier: user.rank_tier,
-        companion: companionData // ⭐️ إضافة بيانات الرفيق هنا
+        two_fa_enabled: user.two_fa_enabled,
+        companion: companionData 
       },
       profileCompleted
     });
@@ -3178,6 +3179,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
