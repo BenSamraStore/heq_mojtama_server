@@ -1098,15 +1098,23 @@ app.post("/api/videos", auth, upload.single("video"), async (req, res) => {
     let thumbnailUrl = null;
     let duration = null;
 
-   
     try {
       console.log(`☁️ Uploading video for user ${userId} to Cloudinary...`);
       const result = await cloudinary.uploader.upload(req.file.path, {
         resource_type: "video", 
         folder: "heq_mojtama/videos",
         
+        // ✨✨✨ هذا هو التعديل الأساسي ✨✨✨
+        // هذا الأمر يخبر كلاوديناري أن يجعل الفيديو 9:16 ويضيف حواف سوداء
+        transformation: [
+          { width: 576, height: 1024, crop: "pad", background: "black" }
+        ],
+        // ✨✨✨ (انتهى التعديل الأساسي) ✨✨✨
+
+        // (تعديل اختياري): من الأفضل جعل الصورة المصغرة بنفس النسبة
         eager: [
-          { width: 300, height: 400, crop: "limit", format: 'jpg' }
+          // { width: 300, height: 400, crop: "limit", format: 'jpg' } // ❌ النسبة القديمة
+          { width: 300, height: 533, crop: "fill", gravity: "auto", format: 'jpg' } // ✅ نسبة 9:16
         ],
         eager_async: false, 
         
@@ -3214,6 +3222,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
