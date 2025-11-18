@@ -1216,6 +1216,51 @@ app.get("/api/videos", async (req, res) => {
     res.status(500).json({ ok: false, error: "فشل في جلب الفيديوهات" });
   }
 });
+// --- 6. جلب فيديوهات مستخدم معين (للملف الشخصي) ---
+app.get("/api/users/:id/videos", async (req, res) => {
+  try {
+    const userId = parseInt(req.params.id);
+    if (isNaN(userId)) return res.status(400).json({ error: "رقم المستخدم غير صالح" });
+
+    const { rows } = await pool.query(`
+      SELECT
+        v.id, v.user_id, v.cloudinary_url, v.thumbnail_url, v.description, v.duration,
+        v.agree, v.disagree, v.created_at,
+        u.name AS author_name, u.avatar AS author_avatar,
+        u.faith_rank AS author_rank, u.rank_tier AS author_tier,
+        (SELECT COUNT(*) FROM video_comments vc WHERE vc.video_id = v.id) AS comment_count
+      FROM videos v
+      LEFT JOIN users u ON u.id = v.user_id
+      WHERE v.user_id = $1  -- ✨ الشرط: فيديوهات هذا المستخدم فقط
+      ORDER BY v.created_at DESC
+    `, [userId]);
+
+    // تنسيق البيانات
+    const videos = rows.map(video => ({
+      id: video.id,
+      user_id: video.user_id,
+      url: video.cloudinary_url,
+      thumbnail: video.thumbnail_url,
+      description: video.description,
+      duration: video.duration ? parseInt(video.duration, 10) : null,
+      agree: parseInt(video.agree, 10),
+      disagree: parseInt(video.disagree, 10),
+      comment_count: parseInt(video.comment_count, 10) || 0,
+      created_at: parseInt(video.created_at, 10),
+      author_name: video.author_name || "مستخدم محذوف",
+      author_avatar: video.author_avatar || "https://res.cloudinary.com/dqmlhgegm/image/upload/v1760854549/WhatsApp_Image_2025-10-19_at_8.15.20_AM_njvijg.jpg",
+      author_rank: video.author_rank,
+      author_tier: video.author_tier,
+    }));
+
+    res.json({ ok: true, videos: videos });
+
+  } catch (err) {
+    console.error("❌ خطأ جلب فيديوهات المستخدم:", err);
+    res.status(500).json({ ok: false, error: "فشل جلب الفيديوهات" });
+  }
+});
+
 // --- 3. Delete a Video ---
 app.delete("/api/videos/:id", auth, async (req, res) => {
   try {
@@ -3222,6 +3267,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
