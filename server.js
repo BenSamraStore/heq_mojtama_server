@@ -149,7 +149,7 @@ async function notifyUser(toUserId, title, body, type = "system", meta = {}) {
   }
 }
 
-// ✅ اختبار بسيط
+
 app.get("/api/test", (_req, res) => {
   res.json({ ok: true, message: "✅ API + DB (PG) ready", time: new Date().toISOString() });
 });
@@ -3267,6 +3267,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
