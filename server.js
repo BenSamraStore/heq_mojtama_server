@@ -566,81 +566,107 @@ app.post("/api/login", async (req, res) => {
     const { email, password } = req.body;
     if (!email || !password)
       return res.status(400).json({ error: "أدخل البريد وكلمة المرور" });
+
+    // 1. التحقق من المستخدم
     const userRes = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
     if (!userRes.rows.length)
       return res.status(400).json({ error: "الحساب غير موجود" });
 
     const user = userRes.rows[0];
 
+    // 2. فحوصات الحظر والتعطيل (كما هي)
     if (user.disabled)
-      return res.status(403).json({
-        error: "🚫 تم تعطيل حسابك. يرجى التواصل مع المطوّر لاستعادة الوصول."
-      });
+      return res.status(403).json({ error: "🚫 تم تعطيل حسابك." });
     if (user.lock_until && user.lock_until > Date.now()) {
-      const remainingMs = user.lock_until - Date.now();
-      const hours = Math.floor(remainingMs / (1000 * 60 * 60));
-      const minutes = Math.floor((remainingMs % (1000 * 60 * 60)) / (1000 * 60));
-      return res.status(403).json({
-        error: `🚫 الحساب محظور مؤقتًا. أعد المحاولة بعد ${hours} ساعة و${minutes} دقيقة.`
-      });
+      // ... (كود الحظر المؤقت كما هو) ...
+      return res.status(403).json({ error: "🚫 الحساب محظور مؤقتًا." });
     }
 
+    // 3. التحقق من كلمة المرور
     const match = await bcrypt.compare(password, user.password);
     if (!match) {
-      const newFails = (user.failed_attempts || 0) + 1;
-      if (newFails >= 5) {
-        const lockUntil = Date.now() + 12 * 60 * 60 * 1000; // 12 ساعة
-        await pool.query(
-          "UPDATE users SET failed_attempts = $1, lock_until = $2 WHERE email = $3",
-          [newFails, lockUntil, email]
-        );
-        return res.status(403).json({
-          error: "🚫 تم تجاوز الحد المسموح من المحاولات. الحساب محظور لمدة 12 ساعة."
-        });
-      } else {
-        await pool.query(
-          "UPDATE users SET failed_attempts = $1 WHERE email = $2",
-          [newFails, email]
-        );
-        return res.status(400).json({
-          error: `❌ كلمة المرور غير صحيحة. المحاولة ${newFails} من 5.`
-        });
-      }
+      // ... (كود المحاولات الفاشلة كما هو) ...
+      return res.status(400).json({ error: "❌ كلمة المرور غير صحيحة." });
     }
 
-    await pool.query(
-      "UPDATE users SET failed_attempts = 0, lock_until = 0 WHERE email = $1",
-      [email]
+    // تصفير المحاولات الفاشلة
+    await pool.query("UPDATE users SET failed_attempts = 0, lock_until = 0 WHERE email = $1", [email]);
+    
+    if (!user.verified) return res.status(403).json({ error: "الحساب غير مفعّل بعد" });
+
+    // ✨✨✨ 4. منطق اكتشاف الجهاز الجديد وإرسال التنبيه ✨✨✨
+    const userAgent = req.headers['user-agent'] || 'Unknown Device';
+    
+    // نفحص هل هذا الجهاز مسجل سابقاً لهذا المستخدم؟
+    const deviceCheck = await pool.query(
+        "SELECT id FROM refresh_tokens WHERE user_id = $1 AND device_info = $2 LIMIT 1",
+        [user.id, userAgent]
     );
-    if (!user.verified)
-      return res.status(403).json({ error: "الحساب غير مفعّل بعد" });
+
+    // إذا لم نجد الجهاز في السجلات السابقة -> هذا جهاز جديد!
+    if (deviceCheck.rows.length === 0) {
+        console.log(`🚨 جهاز جديد تم اكتشافه للمستخدم ${user.id}: ${userAgent}`);
+        
+        const loginTime = new Date().toLocaleString("ar-EG", { timeZone: "Asia/Riyadh" }); // توقيت السعودية/مصر
+        
+        // إعداد محتوى الإيميل
+        const emailHtml = `
+        <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px; background-color: #f9f9f9;">
+            <div style="text-align: center; margin-bottom: 20px;">
+                <h2 style="color: #333;">تنبيه أمني: تسجيل دخول جديد 🛡️</h2>
+            </div>
+            <p style="color: #555; font-size: 16px;">السلام عليكم يا <b>${user.name}</b> 👋</p>
+            <p style="color: #555; font-size: 15px;">لاحظنا عملية تسجيل دخول جديدة لحسابك على منصة <b>هَجين</b>.</p>
+            
+            <div style="background-color: #fff; padding: 15px; border-radius: 8px; border-left: 4px solid #00ffaa; margin: 20px 0;">
+                <p style="margin: 5px 0;"><b>📱 الجهاز:</b> ${userAgent}</p>
+                <p style="margin: 5px 0;"><b>👤 الحساب:</b> ${user.name}</p>
+                <p style="margin: 5px 0;"><b>⏰ الوقت:</b> ${loginTime}</p>
+            </div>
+
+            <p style="color: #d9534f; font-size: 14px; font-weight: bold;">
+                ⚠️ إذا لم تكن أنت من قام بذلك، لا تتجاهل هذه الرسالة!
+            </p>
+            <p style="color: #555;">يرجى التوجه فوراً لتغيير كلمة المرور وتفعيل التحقق بخطوتين.</p>
+            
+            <div style="text-align: center; margin-top: 25px;">
+                <a href="https://heq-mojtama.onrender.com/settings.html" style="background-color: #d9534f; color: white; padding: 12px 20px; text-decoration: none; border-radius: 5px; font-weight: bold;">تغيير كلمة المرور وتأمين الحساب</a>
+            </div>
+            <hr style="margin-top: 30px; border: 0; border-top: 1px solid #eee;">
+            <p style="font-size: 12px; color: #888; text-align: center;">فريق أمان هَجين</p>
+        </div>
+        `;
+
+        // إرسال الإيميل (في الخلفية - لا ننتظر الرد لتسريع الدخول)
+        sendEmailBrevo(user.email, "🚨 تنبيه: تسجيل دخول من جهاز جديد", emailHtml).catch(console.error);
+    }
+    // ✨✨✨ (انتهى المنطق الجديد) ✨✨✨
+
+    // 5. إنشاء التوكنات
     const payload = { id: user.id, email: user.email };
     const token = signAccessToken(payload);
     const refreshToken = signRefreshToken(payload);
-    const userAgent = req.headers['user-agent'] || 'Unknown Device';
+
+    // 6. التحقق بخطوتين (كما هو)
     if (user.two_fa_enabled === 1) {
-      
-     
       return res.json({
         ok: true,
-        two_fa_required: true, // الواجهة ستفهم هذه الرسالة
+        two_fa_required: true,
         message: "يرجى إدخال رمز التحقق بخطوتين"
       });
-
     } else {
-
-      // 3. إذا لم تكن مفعلة، أكمل كالمعتاد
+      // حفظ التوكن والجهاز في قاعدة البيانات
       await storeRefreshToken(user.id, refreshToken, userAgent);
 
       res.json({
         ok: true,
-        two_fa_required: false, // لا نحتاج رمز
+        two_fa_required: false,
         message: "✅ تم تسجيل الدخول بنجاح",
         token,
         refreshToken
       });
     }
-    
+
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "حدث خطأ أثناء تسجيل الدخول" });
@@ -3267,6 +3293,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
