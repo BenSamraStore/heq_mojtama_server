@@ -604,18 +604,16 @@ app.post("/api/login", async (req, res) => {
 
     const user = userRes.rows[0];
 
-    // 2. فحوصات الحظر والتعطيل (كما هي)
+    // 2. فحوصات الحظر والتعطيل
     if (user.disabled)
       return res.status(403).json({ error: "🚫 تم تعطيل حسابك." });
     if (user.lock_until && user.lock_until > Date.now()) {
-      // ... (كود الحظر المؤقت كما هو) ...
       return res.status(403).json({ error: "🚫 الحساب محظور مؤقتًا." });
     }
 
     // 3. التحقق من كلمة المرور
     const match = await bcrypt.compare(password, user.password);
     if (!match) {
-      // ... (كود المحاولات الفاشلة كما هو) ...
       return res.status(400).json({ error: "❌ كلمة المرور غير صحيحة." });
     }
 
@@ -624,29 +622,31 @@ app.post("/api/login", async (req, res) => {
     
     if (!user.verified) return res.status(403).json({ error: "الحساب غير مفعّل بعد" });
 
+    // ✨✨✨ 4. منطق اكتشاف الجهاز الجديد (المعدل) ✨✨✨
     
+    // 1. استخراج المعلومات باستخدام المكتبات الجديدة
     const deviceInfo = getClientDetails(req); 
-    // سنستخدم deviceInfo بدلاً من userAgent في قاعدة البيانات
     
-    // تنظيف الجلسات القديمة لنفس الجهاز (باستخدام الاسم الجديد)
+    // 2. تنظيف الجلسات القديمة لنفس الجهاز (باستخدام deviceInfo)
     await pool.query(
         `UPDATE refresh_tokens 
          SET revoked = 1 
          WHERE user_id = $1 AND device_info = $2 AND revoked = 0`,
         [user.id, deviceInfo]
     );
+
+    // 3. التحقق هل هذا الجهاز جديد؟ (نستخدم deviceInfo)
     const deviceCheck = await pool.query(
         "SELECT id FROM refresh_tokens WHERE user_id = $1 AND device_info = $2 LIMIT 1",
-        [user.id, userAgent]
+        [user.id, deviceInfo] // ✅ استخدمنا deviceInfo هنا
     );
 
-    // إذا لم نجد الجهاز في السجلات السابقة -> هذا جهاز جديد!
+    // إذا لم نجد الجهاز -> نرسل تنبيه
     if (deviceCheck.rows.length === 0) {
-        console.log(`🚨 جهاز جديد تم اكتشافه للمستخدم ${user.id}: ${userAgent}`);
+        console.log(`🚨 جهاز جديد: ${deviceInfo}`); // ✅ وهنا
         
-        const loginTime = new Date().toLocaleString("ar-EG", { timeZone: "Asia/Riyadh" }); // توقيت السعودية/مصر
+        const loginTime = new Date().toLocaleString("ar-EG", { timeZone: "Asia/Riyadh" });
         
-        // إعداد محتوى الإيميل
         const emailHtml = `
         <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px; background-color: #f9f9f9;">
             <div style="text-align: center; margin-bottom: 20px;">
@@ -656,8 +656,7 @@ app.post("/api/login", async (req, res) => {
             <p style="color: #555; font-size: 15px;">لاحظنا عملية تسجيل دخول جديدة لحسابك على منصة <b>هَجين</b>.</p>
             
             <div style="background-color: #fff; padding: 15px; border-radius: 8px; border-left: 4px solid #00ffaa; margin: 20px 0;">
-                <p style="margin: 5px 0;"><b>📱 الجهاز:</b> ${userAgent}</p>
-                <p style="margin: 5px 0;"><b>👤 الحساب:</b> ${user.name}</p>
+                <p style="margin: 5px 0;"><b>📱 الجهاز:</b> ${deviceInfo}</p> <p style="margin: 5px 0;"><b>👤 الحساب:</b> ${user.name}</p>
                 <p style="margin: 5px 0;"><b>⏰ الوقت:</b> ${loginTime}</p>
             </div>
 
@@ -674,7 +673,6 @@ app.post("/api/login", async (req, res) => {
         </div>
         `;
 
-        // إرسال الإيميل (في الخلفية - لا ننتظر الرد لتسريع الدخول)
         sendEmailBrevo(user.email, "🚨 تنبيه: تسجيل دخول من جهاز جديد", emailHtml).catch(console.error);
     }
     // ✨✨✨ (انتهى المنطق الجديد) ✨✨✨
@@ -684,7 +682,7 @@ app.post("/api/login", async (req, res) => {
     const token = signAccessToken(payload);
     const refreshToken = signRefreshToken(payload);
 
-    // 6. التحقق بخطوتين (كما هو)
+    // 6. التحقق بخطوتين
     if (user.two_fa_enabled === 1) {
       return res.json({
         ok: true,
@@ -693,7 +691,7 @@ app.post("/api/login", async (req, res) => {
       });
     } else {
       // حفظ التوكن والجهاز في قاعدة البيانات
-      await storeRefreshToken(user.id, refreshToken, userAgent);
+      await storeRefreshToken(user.id, refreshToken, deviceInfo); // ✅ وهنا
 
       res.json({
         ok: true,
@@ -3330,6 +3328,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
