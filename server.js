@@ -617,17 +617,13 @@ app.post("/api/login", async (req, res) => {
       return res.status(400).json({ error: "❌ كلمة المرور غير صحيحة." });
     }
 
-    // تصفير المحاولات الفاشلة
+    // تصفير المحاولات الفاشلة عند النجاح
     await pool.query("UPDATE users SET failed_attempts = 0, lock_until = 0 WHERE email = $1", [email]);
     
     if (!user.verified) return res.status(403).json({ error: "الحساب غير مفعّل بعد" });
-
-    // ✨✨✨ 4. منطق اكتشاف الجهاز الجديد (المعدل) ✨✨✨
-    
-    // 1. استخراج المعلومات باستخدام المكتبات الجديدة
     const deviceInfo = getClientDetails(req); 
-    
-    // 2. تنظيف الجلسات القديمة لنفس الجهاز (باستخدام deviceInfo)
+
+    // ب. ✅ منع التكرار: إغلاق أي جلسة سابقة نشطة لنفس هذا الجهاز وتوقيعها كـ revoked
     await pool.query(
         `UPDATE refresh_tokens 
          SET revoked = 1 
@@ -635,54 +631,40 @@ app.post("/api/login", async (req, res) => {
         [user.id, deviceInfo]
     );
 
-    // 3. التحقق هل هذا الجهاز جديد؟ (نستخدم deviceInfo)
+    // ج. ✅ فحص الأمان: هل هذا جهاز جديد كلياً لم يدخل منه سابقاً؟
+    // (نبحث في كل السجلات، حتى المغلقة، لنعرف إذا كان الجهاز مألوفاً)
     const deviceCheck = await pool.query(
         "SELECT id FROM refresh_tokens WHERE user_id = $1 AND device_info = $2 LIMIT 1",
-        [user.id, deviceInfo] // ✅ استخدمنا deviceInfo هنا
+        [user.id, deviceInfo]
     );
 
-    // إذا لم نجد الجهاز -> نرسل تنبيه
+    // د. إرسال تنبيه إذا كان الجهاز جديداً
     if (deviceCheck.rows.length === 0) {
-        console.log(`🚨 جهاز جديد: ${deviceInfo}`); // ✅ وهنا
+        console.log(`🚨 جهاز جديد: ${deviceInfo}`);
         
         const loginTime = new Date().toLocaleString("ar-EG", { timeZone: "Asia/Riyadh" });
-        
         const emailHtml = `
-        <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px; background-color: #f9f9f9;">
-            <div style="text-align: center; margin-bottom: 20px;">
-                <h2 style="color: #333;">تنبيه أمني: تسجيل دخول جديد 🛡️</h2>
+        <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px; background-color: #f9f9f9;">
+            <h2 style="color: #333; text-align: center;">تنبيه أمني: تسجيل دخول جديد 🛡️</h2>
+            <p>السلام عليكم يا <b>${user.name}</b> 👋</p>
+            <p>لاحظنا تسجيل دخول جديد لحسابك على منصة <b>هَجين</b>.</p>
+            <div style="background-color: #fff; padding: 15px; border-radius: 8px; border-right: 4px solid #00ffaa; margin: 20px 0;">
+                <p><b>📱 الجهاز:</b> ${deviceInfo}</p>
+                <p><b>⏰ الوقت:</b> ${loginTime}</p>
             </div>
-            <p style="color: #555; font-size: 16px;">السلام عليكم يا <b>${user.name}</b> 👋</p>
-            <p style="color: #555; font-size: 15px;">لاحظنا عملية تسجيل دخول جديدة لحسابك على منصة <b>هَجين</b>.</p>
-            
-            <div style="background-color: #fff; padding: 15px; border-radius: 8px; border-left: 4px solid #00ffaa; margin: 20px 0;">
-                <p style="margin: 5px 0;"><b>📱 الجهاز:</b> ${deviceInfo}</p> <p style="margin: 5px 0;"><b>👤 الحساب:</b> ${user.name}</p>
-                <p style="margin: 5px 0;"><b>⏰ الوقت:</b> ${loginTime}</p>
-            </div>
+            <p style="color: #d9534f; font-weight: bold;">⚠️ إذا لم تكن أنت، يرجى تغيير كلمة المرور فوراً.</p>
+        </div>`;
 
-            <p style="color: #d9534f; font-size: 14px; font-weight: bold;">
-                ⚠️ إذا لم تكن أنت من قام بذلك، لا تتجاهل هذه الرسالة!
-            </p>
-            <p style="color: #555;">يرجى التوجه فوراً لتغيير كلمة المرور وتفعيل التحقق بخطوتين.</p>
-            
-            <div style="text-align: center; margin-top: 25px;">
-                <a href="https://heq-mojtama.onrender.com/settings.html" style="background-color: #d9534f; color: white; padding: 12px 20px; text-decoration: none; border-radius: 5px; font-weight: bold;">تغيير كلمة المرور وتأمين الحساب</a>
-            </div>
-            <hr style="margin-top: 30px; border: 0; border-top: 1px solid #eee;">
-            <p style="font-size: 12px; color: #888; text-align: center;">فريق أمان هَجين</p>
-        </div>
-        `;
-
-        sendEmailBrevo(user.email, "🚨 تنبيه: تسجيل دخول من جهاز جديد", emailHtml).catch(console.error);
+        // إرسال في الخلفية
+        sendEmailBrevo(user.email, "🚨 تنبيه: تسجيل دخول جديد", emailHtml).catch(console.error);
     }
-    // ✨✨✨ (انتهى المنطق الجديد) ✨✨✨
 
-    // 5. إنشاء التوكنات
+    // 5. إصدار التوكنات الجديدة
     const payload = { id: user.id, email: user.email };
     const token = signAccessToken(payload);
     const refreshToken = signRefreshToken(payload);
 
-    // 6. التحقق بخطوتين
+    // 6. التعامل مع التحقق بخطوتين (2FA)
     if (user.two_fa_enabled === 1) {
       return res.json({
         ok: true,
@@ -690,8 +672,8 @@ app.post("/api/login", async (req, res) => {
         message: "يرجى إدخال رمز التحقق بخطوتين"
       });
     } else {
-      // حفظ التوكن والجهاز في قاعدة البيانات
-      await storeRefreshToken(user.id, refreshToken, deviceInfo); // ✅ وهنا
+      // حفظ التوكن الجديد في قاعدة البيانات مع معلومات الجهاز
+      await storeRefreshToken(user.id, refreshToken, deviceInfo);
 
       res.json({
         ok: true,
@@ -3339,6 +3321,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
