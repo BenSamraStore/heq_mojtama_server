@@ -4,6 +4,8 @@ const cors = require("cors");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const fs = require("fs");
+const UAParser = require('ua-parser-js');
+const geoip = require('geoip-lite');
 const path = require("path");
 const multer = require("multer");
 const { Pool } = require("pg");
@@ -560,6 +562,34 @@ app.post("/api/verify", async (req, res) => {
     res.status(500).json({ error: "فشل أثناء التحقق أو إنشاء الحساب" });
   }
 });
+// 🌍 دالة استخراج معلومات الجهاز والموقع
+function getClientDetails(req) {
+  // 1. تحليل الجهاز (User-Agent)
+  const ua = UAParser(req.headers['user-agent']);
+  let deviceName = `${ua.os.name || 'System'} - ${ua.browser.name || 'Browser'}`;
+  
+  // محاولة الحصول على اسم الجهاز الحقيقي (مثل Samsung SM-A50)
+  if (ua.device.model) {
+    deviceName = `${ua.device.vendor || ''} ${ua.device.model} (${ua.os.name || ''})`;
+  }
+
+  // 2. تحليل الموقع (IP)
+  // ملاحظة: في Render نستخدم x-forwarded-for للحصول على الـ IP الحقيقي
+  let ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '';
+  if (ip.includes(',')) ip = ip.split(',')[0].trim(); // أخذ أول IP في القائمة
+
+  const geo = geoip.lookup(ip);
+  let location = 'موقع غير معروف';
+  
+  if (geo) {
+    location = `${geo.city || ''}, ${geo.country || ''}`;
+  } else if (ip === '::1' || ip === '127.0.0.1') {
+    location = 'Localhost';
+  }
+
+  // دمج النتيجة
+  return `${deviceName} | 📍 ${location}`;
+}
 
 app.post("/api/login", async (req, res) => {
   try {
@@ -594,10 +624,17 @@ app.post("/api/login", async (req, res) => {
     
     if (!user.verified) return res.status(403).json({ error: "الحساب غير مفعّل بعد" });
 
-    // ✨✨✨ 4. منطق اكتشاف الجهاز الجديد وإرسال التنبيه ✨✨✨
-    const userAgent = req.headers['user-agent'] || 'Unknown Device';
     
-    // نفحص هل هذا الجهاز مسجل سابقاً لهذا المستخدم؟
+    const deviceInfo = getClientDetails(req); 
+    // سنستخدم deviceInfo بدلاً من userAgent في قاعدة البيانات
+    
+    // تنظيف الجلسات القديمة لنفس الجهاز (باستخدام الاسم الجديد)
+    await pool.query(
+        `UPDATE refresh_tokens 
+         SET revoked = 1 
+         WHERE user_id = $1 AND device_info = $2 AND revoked = 0`,
+        [user.id, deviceInfo]
+    );
     const deviceCheck = await pool.query(
         "SELECT id FROM refresh_tokens WHERE user_id = $1 AND device_info = $2 LIMIT 1",
         [user.id, userAgent]
@@ -3293,6 +3330,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
