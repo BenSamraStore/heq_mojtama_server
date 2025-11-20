@@ -2475,31 +2475,35 @@ app.delete("/api/connect", auth, async (req, res) => {
 });
 
 // =======================================
-// ✅ قبول أو رفض طلب الوصل
+// ✅ قبول أو رفض طلب الوصل (معدلة لحذف الإشعار القديم)
 // =======================================
 app.post("/api/connect/respond", auth, async (req, res) => {
   try {
-    const userId = req.user.id;
-    const { requester_id, action } = req.body;
+    const userId = req.user.id; // المستخدم الحالي (المستقبل للطلب)
+    const { requester_id, action } = req.body; // requester_id هو المرسل
     const now = Date.now();
 
     if (!requester_id || !["accept", "reject"].includes(action))
       return res.status(400).json({ error: "طلب غير صالح" });
 
+    // 1. التحقق من وجود الطلب
     const { rows } = await pool.query(
       `SELECT * FROM connections WHERE user_id=$1 AND target_id=$2 AND status='pending'`,
       [requester_id, userId]
     );
 
     if (!rows.length)
-      return res.status(404).json({ error: "لم يتم العثور على الطلب" });
+      return res.status(404).json({ error: "لم يتم العثور على الطلب (ربما تمت معالجته مسبقاً)" });
 
+    // 2. تنفيذ الإجراء (قبول أو رفض)
     if (action === "accept") {
+      // تحديث حالة السجل الموجود
       await pool.query(
         `UPDATE connections SET status='connected', updated_at=$1 WHERE user_id=$2 AND target_id=$3`,
         [now, requester_id, userId]
       );
 
+      // إنشاء السجل العكسي لضمان الصداقة من الطرفين
       await pool.query(
         `INSERT INTO connections (user_id, target_id, status, created_at, updated_at)
          VALUES ($1, $2, 'connected', $3, $3)
@@ -2507,6 +2511,7 @@ app.post("/api/connect/respond", auth, async (req, res) => {
         [userId, requester_id, now]
       );
 
+      // إشعار المرسل بأنه تم القبول
       await notifyUser(
         requester_id,
         "🤝 تم قبول طلب الوصل",
@@ -2515,13 +2520,14 @@ app.post("/api/connect/respond", auth, async (req, res) => {
         { sender_id: userId }
       );
 
-      res.json({ ok: true, message: "✅ تم قبول الطلب بنجاح" });
     } else {
+      // حالة الرفض: حذف الطلب من جدول connections
       await pool.query(
         `DELETE FROM connections WHERE user_id=$1 AND target_id=$2 AND status='pending'`,
         [requester_id, userId]
       );
 
+      // إشعار المرسل بأنه تم الرفض
       await notifyUser(
         requester_id,
         "❌ تم رفض طلب الوصل",
@@ -2529,9 +2535,22 @@ app.post("/api/connect/respond", auth, async (req, res) => {
         "connect_reject",
         { sender_id: userId }
       );
-
-      res.json({ ok: true, message: "❌ تم رفض الطلب" });
     }
+
+    // 🔥🔥🔥 الخطوة الحاسمة المضافة 🔥🔥🔥
+    // بعد الانتهاء من الطلب، نقوم بحذف الإشعار الخاص بهذا الطلب من قائمة إشعارات المستخدم الحالي
+    // حتى لا يظهر له الزر مرة أخرى عند تحديث الصفحة
+    await pool.query(
+      `DELETE FROM notifications 
+       WHERE to_user_id = $1 
+       AND type = 'connect_request' 
+       AND meta->>'sender_id' = $2`,
+      [userId, requester_id.toString()] // نحذف الإشعار القادم من هذا الشخص تحديداً
+    );
+
+    const msg = action === "accept" ? "✅ تم قبول الطلب بنجاح" : "❌ تم رفض الطلب";
+    res.json({ ok: true, message: msg });
+
   } catch (err) {
     console.error("connect/respond:", err);
     res.status(500).json({ error: "خطأ في قاعدة البيانات" });
@@ -3320,6 +3339,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
