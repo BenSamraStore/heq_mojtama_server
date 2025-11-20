@@ -3003,13 +3003,13 @@ app.post("/api/2fa/verify", auth, async (req, res) => {
 // 3. نقطة النهاية لإكمال تسجيل الدخول (عندما تكون 2FA مفعلة)
 app.post("/api/2fa/login", async (req, res) => {
   try {
-    const { email, password, token } = req.body; // الرمز السداسي + الإيميل والباسورد
+    const { email, password, token } = req.body; 
 
     if (!email || !password || !token) {
       return res.status(400).json({ error: "البيانات ناقصة" });
     }
 
-    // 1. التحقق من الإيميل والباسورد (مرة أخرى للأمان)
+    // 1. التحقق من الإيميل والباسورد
     const userRes = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
     if (!userRes.rows.length) {
       return res.status(400).json({ error: "الحساب غير موجود" });
@@ -3029,13 +3029,24 @@ app.post("/api/2fa/login", async (req, res) => {
       return res.status(400).json({ error: "❌ الرمز غير صحيح" });
     }
 
-    // 3. كل شيء صحيح -> إصدار التوكنات (نفس كود /api/login)
+    // 3. كل شيء صحيح -> إصدار التوكنات
     const payload = { id: user.id, email: user.email };
     const accessToken = signAccessToken(payload);
     const refreshToken = signRefreshToken(payload);
     
-    const userAgent = req.headers['user-agent'] || 'Unknown Device';
-    await storeRefreshToken(user.id, refreshToken, userAgent);
+    // ✨✨✨ التعديل هنا: استخدام deviceInfo بدلاً من userAgent ✨✨✨
+    const deviceInfo = getClientDetails(req); // استخدم الدالة الجديدة
+    
+    // (اختياري: تنظيف الجلسات القديمة هنا أيضاً لضمان عدم التكرار)
+    await pool.query(
+        `UPDATE refresh_tokens SET revoked = 1 
+         WHERE user_id = $1 AND device_info = $2 AND revoked = 0`,
+        [user.id, deviceInfo]
+    );
+
+    // حفظ التوكن مع المعلومات الجديدة
+    await storeRefreshToken(user.id, refreshToken, deviceInfo); 
+    // ✨✨✨ نهاية التعديل ✨✨✨
 
     res.json({
       ok: true,
@@ -3328,6 +3339,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
