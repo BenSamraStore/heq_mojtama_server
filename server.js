@@ -192,7 +192,7 @@ app.get("/api/test", (_req, res) => {
       )
     `);
 
-    // posts
+   
     await runQuery(`
       CREATE TABLE IF NOT EXISTS posts (
         id SERIAL PRIMARY KEY,
@@ -3339,6 +3339,7 @@ app.get("/", (_, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
 
 
 
